@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/credit.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Credit Score Dashboard</title>
+  </head>
+  <body class="bg-gray-100 dark:bg-dark-primary">
+    <div id="root">
+      <!-- React app will be mounted here -->
+    </div>
+    <script>
+      // Debug: Check if root element exists
+      console.log('index.html: Checking for root element...');
+      const rootElement = document.getElementById('root');
+      console.log('index.html: Root element found?', !!rootElement);
+      
+      // Add a temporary message to verify the DOM is loading
+      const tempDiv = document.createElement('div');
+      tempDiv.textContent = 'Loading application...';
+      tempDiv.style.padding = '20px';
+      tempDiv.style.fontFamily = 'sans-serif';
+      rootElement.appendChild(tempDiv);
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

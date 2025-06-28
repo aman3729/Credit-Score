@@ -1,0 +1,32 @@
+[2025-06-19T18:49:05.969Z] === Starting Server ===
+[2025-06-19T18:49:05.973Z] Node.js version: v22.14.0
+[2025-06-19T18:49:05.974Z] Current directory: C:\Users\amannn\Pictures\credit-score-dashboard\backend
+[2025-06-19T18:49:05.975Z] Loading .env from: C:/Users/amannn/Pictures/credit-score-dashboard/backend/.env
+[2025-06-19T18:49:05.978Z] ✅ Environment variables loaded
+[2025-06-19T18:49:06.017Z] 
+=== Server Started ===
+[2025-06-19T18:49:06.018Z] Environment: development
+[2025-06-19T18:49:06.018Z] Server running on port 3000
+[2025-06-19T18:49:06.019Z] MongoDB URI: ***
+[2025-06-19T18:49:06.020Z] Frontend URL: http://localhost:5177
+[2025-06-19T18:49:06.021Z] Press Ctrl+C to stop
+
+[2025-06-19T18:49:11.573Z] 
+Shutting down server...
+[2025-06-19T18:51:03.826Z] === Starting Server ===
+[2025-06-19T18:51:03.829Z] Node.js version: v22.14.0
+[2025-06-19T18:51:03.830Z] Current directory: C:\Users\amannn\Pictures\credit-score-dashboard\backend
+[2025-06-19T18:51:03.831Z] Loading .env from: C:/Users/amannn/Pictures/credit-score-dashboard/backend/.env
+[2025-06-19T18:51:03.833Z] ✅ Environment variables loaded
+[2025-06-19T18:51:03.859Z] 
+=== Server Started ===
+[2025-06-19T18:51:03.860Z] Environment: development
+[2025-06-19T18:51:03.861Z] Server running on port 3000
+[2025-06-19T18:51:03.861Z] MongoDB URI: ***
+[2025-06-19T18:51:03.862Z] Frontend URL: http://localhost:5177
+[2025-06-19T18:51:03.863Z] Press Ctrl+C to stop
+
+[2025-06-19T18:51:34.789Z] GET /health
+[2025-06-19T18:56:23.831Z] 
+Shutting down server...
+[2025-06-19T18:56:23.834Z] Server has been stopped

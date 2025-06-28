@@ -1,0 +1,1068 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { 
+  Card, 
+  Table, 
+  Tag, 
+  Button, 
+  Input, 
+  Spin, 
+  Alert, 
+  Descriptions, 
+  Typography, 
+  Space,
+  message,
+  Divider,
+  Tooltip,
+  Empty,
+  Result,
+  Progress,
+  Statistic,
+  Row,
+  Col
+} from 'antd';
+import { 
+  ArrowLeftOutlined, 
+  SearchOutlined, 
+  ReloadOutlined,
+  InfoCircleOutlined,
+  UserOutlined,
+  MailOutlined,
+  PhoneOutlined,
+  IdcardOutlined,
+  CalendarOutlined,
+  ClockCircleOutlined,
+  RiseOutlined,
+  FallOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  FrownOutlined,
+  DollarOutlined,
+  CheckCircleFilled,
+  CloseCircleFilled,
+  ExclamationCircleFilled
+} from '@ant-design/icons';
+import { api } from '../../lib/api';
+import './UserDataViewer.css';
+
+const { Title, Text } = Typography;
+
+const UserDataViewer = ({ userId: initialUserId, onBack }) => {
+  // State management
+  const [loading, setLoading] = useState(false);
+  const [userData, setUserData] = useState(null);
+  const [searchQuery, setSearchQuery] = useState(initialUserId || '');
+  const [error, setError] = useState(null);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [lendingDecision, setLendingDecision] = useState(null);
+  const [decisionLoading, setDecisionLoading] = useState(false);
+  const [decisionError, setDecisionError] = useState(null);
+
+  // Network status effect
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  // Fetch with retry logic
+  const fetchWithRetry = useCallback(async (url, options = {}, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        const response = await api.get(url, {
+          ...options,
+          timeout: 10000, // 10 second timeout
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            ...options.headers,
+          }
+        });
+        return response.data?.data || response.data;
+      } catch (error) {
+        if (i === retries - 1) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
+      }
+    }
+  }, []);
+
+  // Get score category based on score value
+  const getScoreCategory = useCallback((score) => {
+    if (score >= 800) return { label: 'Excellent', color: '#52c41a' };
+    if (score >= 740) return { label: 'Very Good', color: '#a0d911' };
+    if (score >= 670) return { label: 'Good', color: '#faad14' };
+    if (score >= 580) return { label: 'Fair', color: '#fa8c16' };
+    return { label: 'Poor', color: '#f5222d' };
+  }, []);
+
+  // Format date for display
+  const formatDate = useCallback((dateString) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return isNaN(date) ? 'Invalid Date' : date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  }, []);
+
+  // Format score with commas
+  const formatScore = useCallback((score) => {
+    return score?.toLocaleString() || 'N/A';
+  }, []);
+
+  // Fetch user data by ID or email
+  const fetchUserByIdentifier = useCallback(async (identifier) => {
+    const trimmedIdentifier = identifier.trim();
+    console.log('Fetching user by identifier:', trimmedIdentifier);
+    
+    if (!trimmedIdentifier) {
+      console.error('Empty identifier provided');
+      return null;
+    }
+    
+    try {
+      let user = null;
+      
+      // Try email search first if it looks like an email
+      if (trimmedIdentifier.includes('@')) {
+        try {
+          console.log('Searching by email:', trimmedIdentifier);
+          const searchResponse = await api.get(`/admin/search-users?q=${encodeURIComponent(trimmedIdentifier)}`);
+          const users = Array.isArray(searchResponse.data) ? searchResponse.data : [];
+          console.log('Search results:', users);
+          
+          if (users.length > 0) {
+            // Try to find exact match first
+            user = users.find(u => 
+              u.email?.toLowerCase() === trimmedIdentifier.toLowerCase()
+            ) || users[0]; // Fall back to first result if no exact match
+          }
+        } catch (error) {
+          console.error('Email search failed, will try ID search:', error);
+        }
+      }
+      
+      // If no user found by email or not an email, try by ID
+      if (!user) {
+        console.log('Trying to fetch by ID:', trimmedIdentifier);
+        const response = await api.get(`/users/${encodeURIComponent(trimmedIdentifier)}`);
+        user = response.data?.data?.user || null;
+      }
+      
+      console.log('Found user:', user);
+      return user;
+      
+    } catch (error) {
+      console.error('Failed to fetch user:', {
+        error: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      throw error; // Re-throw to be handled by the caller
+    }
+  }, []);
+
+  // Fetch lending decision for a user
+  const fetchLendingDecision = useCallback(async (userId) => {
+    if (!userId) return;
+    
+    console.log(`[fetchLendingDecision] Fetching lending decision for user: ${userId}`);
+    setDecisionLoading(true);
+    setDecisionError(null);
+    
+    try {
+      const response = await api.get(`/lending-decision/${userId}`);
+      console.log('[fetchLendingDecision] Response:', response.data);
+      
+      if (response.data && response.data.decision) {
+        setLendingDecision(response.data);
+      } else {
+        console.warn('[fetchLendingDecision] No decision data in response');
+        setLendingDecision(null);
+      }
+    } catch (error) {
+      console.error('[fetchLendingDecision] Error:', {
+        message: error.message,
+        status: error.response?.status,
+        data: error.response?.data
+      });
+      
+      const errorMsg = error.response?.data?.message || 'Failed to fetch lending decision';
+      setDecisionError(errorMsg);
+      setLendingDecision(null);
+    } finally {
+      setDecisionLoading(false);
+    }
+  }, []);
+
+  // Fetch credit scores for the current user
+  const fetchCreditScores = useCallback(async (user) => {
+    if (!user) {
+      message.warning('User not found');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      console.log(`Fetching credit scores for user: ${user._id}`);
+      
+      // Fetch user's credit scores with sorting and limit
+      const response = await fetchWithRetry(
+        `/users/${user._id}/credit-scores`,
+        { 
+          params: { 
+            limit: 30, // Get last 30 scores for history
+            sort: '-createdAt' // Ensure we get the most recent first
+          } 
+        }
+      );
+
+      const scores = Array.isArray(response) ? response : [];
+      console.log(`Fetched ${scores.length} credit scores`, scores);
+      
+      const latestScore = scores[0];
+
+      if (!latestScore) {
+        const msg = 'No credit score found for this user';
+        console.warn(msg);
+        setError(msg);
+        message.warning(msg);
+        return;
+      }
+      
+      console.log('Latest score:', latestScore);
+
+      // Update the user data with the latest score
+      const updatedUserData = {
+        ...(userData || {}),
+        user: user,
+        creditScores: scores,
+        latestScore: latestScore.score,
+        scoreDate: latestScore.createdAt || latestScore.date,
+        scoreCategory: getScoreCategory(latestScore.score)
+      };
+
+      setUserData(updatedUserData);
+      
+      // Fetch lending decision after credit scores are loaded
+      await fetchLendingDecision(user._id);
+
+    } catch (error) {
+      console.error('Error fetching credit scores:', {
+        error: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      
+      let errorMsg = 'Failed to load credit scores';
+      if (error.response?.status === 401) {
+        errorMsg = 'Unauthorized. Please log in again.';
+      } else if (error.response?.status === 404) {
+        errorMsg = 'No credit history found for this user';
+      } else if (!navigator.onLine) {
+        errorMsg = 'You are offline. Please check your internet connection.';
+      }
+      
+      setError(errorMsg);
+      message.error(errorMsg);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchWithRetry, getScoreCategory]);
+  };
+
+  // Calculate score change
+  const getScoreChange = () => {
+    if (!userData.creditScores || userData.creditScores.length < 2) return null;
+    
+    const current = userData.latestScore;
+    const previous = userData.creditScores[1]?.score;
+    const change = current - previous;
+    
+    if (isNaN(change) || change === 0) return null;
+    
+    return {
+      value: Math.abs(change),
+      isPositive: change > 0,
+      percentage: Math.round((Math.abs(change) / previous) * 100)
+    };
+  };
+
+
+
+  // Render the main content with user data
+  const scoreChange = getScoreChange();
+  
+  return (
+    <div className="user-data-viewer">
+      <Card 
+        title={
+          <div className="card-header">
+            {onBack && (
+              <Button 
+                type="text" 
+                icon={<ArrowLeftOutlined />} 
+                onClick={onBack}
+                style={{ marginRight: 8 }}
+              />
+            )}
+            <span>User Credit Report</span>
+          </div>
+        }
+        className="user-data-card"
+        extra={
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Input.Search
+              placeholder="Search by ID or email"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onSearch={handleSearch}
+              style={{ width: 300 }}
+              allowClear
+            />
+            <Button 
+              icon={<ReloadOutlined />} 
+              onClick={() => fetchUserData(userData._id)}
+              loading={loading}
+            >
+              Refresh
+            </Button>
+          </div>
+        }
+      >
+        {/* User Information */}
+        <div className="user-info-section">
+          <div className="user-avatar">
+            <UserOutlined style={{ fontSize: 48, color: '#1890ff' }} />
+          </div>
+          <div className="user-details">
+            <Title level={4} style={{ marginBottom: 4 }}>
+              {userData.name || 'N/A'}
+            </Title>
+            <Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>
+              <IdcardOutlined /> ID: {userData._id}
+            </Text>
+            <Space size="middle">
+              {userData.email && (
+                <Text><MailOutlined /> {userData.email}</Text>
+              )}
+              {userData.phone && (
+                <Text><PhoneOutlined /> {userData.phone}</Text>
+              )}
+            </Space>
+          </div>
+        </div>
+
+        <Divider />
+
+        {/* Credit Score Summary */}
+        <div className="score-summary">
+          <div className="score-display">
+            <div className="score-value">
+              <Title level={1} style={{ margin: 0, color: userData.scoreCategory?.color }}>
+                {formatScore(userData.latestScore)}
+              </Title>
+              <div className="score-category" style={{ color: userData.scoreCategory?.color }}>
+                {userData.scoreCategory?.label}
+              </div>
+            </div>
+            
+            <div className="score-meta">
+              <div className="score-date">
+                <CalendarOutlined /> Last updated: {formatDate(userData.scoreDate)}
+              </div>
+              {scoreChange && (
+                <div className={`score-change ${scoreChange.isPositive ? 'positive' : 'negative'}`}>
+                  {scoreChange.isPositive ? '↑' : '↓'} {scoreChange.value} points 
+                  ({scoreChange.percentage}%)
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Lending Decision */}
+        <div className="lending-decision" style={{ marginTop: 32 }}>
+          <Title level={5} style={{ marginBottom: 16 }}>Lending Decision</Title>
+          <Card loading={decisionLoading}>
+            {decisionError ? (
+              <Alert
+                message="Error"
+                description={decisionError}
+                type="error"
+                showIcon
+              />
+            ) : lendingDecision ? (
+              <div>
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} md={8}>
+                    <Card>
+                      <Statistic
+                        title="Decision"
+                        value={lendingDecision.decision.approved ? 'Approved' : 'Declined'}
+                        valueStyle={{
+                          color: lendingDecision.decision.approved ? '#52c41a' : '#f5222d',
+                          fontSize: '24px',
+                          fontWeight: 'bold'
+                        }}
+                        prefix={
+                          lendingDecision.decision.approved ? 
+                          <CheckCircleFilled style={{ color: '#52c41a' }} /> : 
+                          <CloseCircleFilled style={{ color: '#f5222d' }} />
+                        }
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Card>
+                      <Statistic
+                        title="Confidence"
+                        value={`${Math.round(lendingDecision.decision.confidence * 100)}%`}
+                        valueStyle={{
+                          color: '#1890ff',
+                          fontSize: '24px',
+                          fontWeight: 'bold'
+                        }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Card>
+                      <Statistic
+                        title="Interest Rate"
+                        value={`${(lendingDecision.decision.interestRate * 100).toFixed(2)}%`}
+                        valueStyle={{
+                          color: '#722ed1',
+                          fontSize: '24px',
+                          fontWeight: 'bold'
+                        }}
+                        prefix={<DollarOutlined />}
+                      />
+                    </Card>
+                  </Col>
+                </Row>
+                
+                {lendingDecision.reasons && lendingDecision.reasons.length > 0 && (
+                  <div style={{ marginTop: 24 }}>
+                    <Title level={5} style={{ marginBottom: 8 }}>Decision Factors</Title>
+                    <ul style={{ paddingLeft: 20, margin: 0 }}>
+                      {lendingDecision.reasons.map((reason, index) => (
+                        <li key={index} style={{ marginBottom: 8 }}>
+                          <Text>
+                            {reason.positive ? (
+                              <CheckCircleFilled style={{ color: '#52c41a', marginRight: 8 }} />
+                            ) : (
+                              <ExclamationCircleFilled style={{ color: '#faad14', marginRight: 8 }} />
+                            )}
+                            {reason.message}
+                            {reason.impact && (
+                              <Text type="secondary" style={{ marginLeft: 8 }}>
+                                (Impact: {reason.impact > 0 ? '+' : ''}{Math.round(reason.impact * 100)}%)
+                              </Text>
+                            )}
+                          </Text>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                
+                {lendingDecision.recommendations && lendingDecision.recommendations.length > 0 && (
+                  <div style={{ marginTop: 24 }}>
+                    <Title level={5} style={{ marginBottom: 8 }}>Recommendations</Title>
+                    <ul style={{ paddingLeft: 20, margin: 0 }}>
+                      {lendingDecision.recommendations.map((rec, index) => (
+                        <li key={`rec-${index}`} style={{ marginBottom: 8 }}>
+                          <Text>
+                            <InfoCircleFilled style={{ color: '#1890ff', marginRight: 8 }} />
+                            {rec}
+                          </Text>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <Empty 
+                description={
+                  <span>
+                    No lending decision available. {decisionLoading ? 'Loading...' : 'Please check back later.'}
+                  </span>
+                }
+              />
+            )}
+          </Card>
+        </div>
+        
+        {/* Score History Chart - Placeholder */}
+        <div className="score-history" style={{ marginTop: 32 }}>
+          <Title level={5} style={{ marginBottom: 16 }}>Score History</Title>
+          <div style={{ 
+            background: '#f5f5f5', 
+            borderRadius: 8, 
+            padding: 24, 
+            textAlign: 'center',
+            minHeight: 200,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            <Text type="secondary">Score history chart will be displayed here</Text>
+          </div>
+        </div>
+
+        {/* Additional Information */}
+        <div className="additional-info" style={{ marginTop: 32 }}>
+          <Title level={5} style={{ marginBottom: 16 }}>Additional Information</Title>
+          <Descriptions bordered column={2}>
+            <Descriptions.Item label="Member Since">
+              {formatDate(userData.createdAt) || 'N/A'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Last Active">
+              {formatDate(userData.lastActive) || 'N/A'}
+            </Descriptions.Item>
+            <Descriptions.Item label="Status">
+              {userData.isActive ? (
+                <Tag color="green">Active</Tag>
+              ) : (
+                <Tag color="default">Inactive</Tag>
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="Account Type">
+              <Tag color={userData.role === 'admin' ? 'purple' : 'blue'}>
+                {userData.role?.toUpperCase() || 'USER'}
+              </Tag>
+            </Descriptions.Item>
+          </Descriptions>
+        </div>
+      </Card>
+    </div>
+  );
+
+
+
+  // Handle search
+  const handleSearch = useCallback(() => {
+    const query = searchQuery.trim();
+    if (query) {
+      console.log('Initiating search for:', query);
+      fetchUserData(query);
+    } else {
+      message.warning('Please enter a user ID or email');
+    }
+  }, [searchQuery, fetchUserData]);
+
+
+
+  // Render loading state
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <Spin size="large" />
+        <p>Loading user data...</p>
+      </div>
+    );
+  }
+
+  // Render error state
+  if (error) {
+    return (
+      <Alert
+        message="Error"
+        description={error}
+        type="error"
+        showIcon
+        action={
+          <Button 
+            type="primary" 
+            onClick={() => fetchUserData(searchQuery)}
+            icon={<ReloadOutlined />}
+          >
+            Retry
+          </Button>
+        }
+      />
+    );
+  }
+
+  // Render empty state when no user data is available
+  if (!userData) {
+    return (
+      <Card 
+        title={
+          <>
+            {onBack && (
+              <Button 
+                type="text" 
+                icon={<ArrowLeftOutlined />} 
+                onClick={onBack}
+                style={{ marginRight: 8 }}
+              />
+            )}
+            User Search
+          </>
+        }
+        className="user-data-card"
+      >
+        <div style={{ textAlign: 'center', padding: '40px 0' }}>
+          <SearchOutlined style={{ fontSize: 48, color: '#1890ff', marginBottom: 16 }} />
+          <h3>Search for a User</h3>
+          <p>Enter a user ID or email to view their credit score information</p>
+          <div style={{ maxWidth: 500, margin: '0 auto', marginTop: 24 }}>
+            <Input.Search
+              placeholder="Enter user ID or email"
+              enterButton={
+                <Button type="primary">
+                  <SearchOutlined /> Search
+                </Button>
+              }
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onSearch={handleSearch}
+              size="large"
+            />
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // Fetch credit scores for the current user
+  const fetchCreditScores = useCallback(async (user) => {
+    if (!user) {
+      message.warning('User not found');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      console.log(`Fetching credit scores for user: ${user._id}`);
+      
+      // Fetch user's credit scores
+      const response = await fetchWithRetry(
+        `/users/${user._id}/credit-scores`,
+        { 
+          params: { 
+            limit: 30, // Get last 30 scores for history
+            sort: '-createdAt' // Ensure we get the most recent first
+          } 
+        }
+      );
+
+      const scores = Array.isArray(response) ? response : [];
+      console.log(`Fetched ${scores.length} credit scores`, scores);
+      
+      const latestScore = scores[0];
+
+      if (!latestScore) {
+        const msg = 'No credit score found for this user';
+        console.warn(msg);
+        setError(msg);
+        message.warning(msg);
+        return;
+      }
+      
+      console.log('Latest score:', latestScore);
+
+      // Update the user data with the latest score
+      setUserData(prev => ({
+        ...prev,
+        user: user,
+        creditScores: scores,
+        latestScore: latestScore.score,
+        scoreDate: latestScore.createdAt || latestScore.date,
+        scoreCategory: getScoreCategory(latestScore.score)
+      }));
+
+    } catch (error) {
+      console.error('Error fetching credit scores:', {
+        error: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      
+      let errorMsg = 'Failed to load credit scores';
+      if (error.response?.status === 401) {
+        errorMsg = 'Unauthorized. Please log in again.';
+      } else if (error.response?.status === 404) {
+        errorMsg = 'No credit history found for this user';
+      } else if (!navigator.onLine) {
+        errorMsg = 'You are offline. Please check your internet connection.';
+      }
+      
+      setError(errorMsg);
+      message.error(errorMsg);
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchWithRetry, getScoreCategory]);
+  };
+    }
+    
+    // Prepare user data update
+    const userDataUpdate = {
+      user: {
+        _id: user._id,
+        email: user.email,
+        name: user.name || 'Unknown User',
+        role: user.role
+      },
+      currentScore,
+      creditScores: creditScores.map((score, index) => ({
+        ...score,
+        date: score.date || score.createdAt || new Date().toISOString(),
+        key: score._id || `score-${index}-${Date.now()}`
+      })),
+      scoresError,
+      lastUpdated: new Date().toISOString()
+    };
+    
+    // Update state with the new data
+    setUserData(userDataUpdate);
+    
+    // Show appropriate message to user
+    if (scoresError) {
+      message.warning(scoresError);
+    } else if (!creditScores.length) {
+      message.info('No credit history found');
+    } else {
+      message.success('User data loaded successfully');
+    }
+    
+    return userDataUpdate;
+  };
+
+  const fetchUserData = async () => {
+    const trimmedId = searchQuery.trim();
+    if (!trimmedId) {
+      message.warning('Please enter a user ID or email');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setUserData(null);
+      setError(null);
+      
+      console.log('Starting user data fetch for:', trimmedId);
+      
+      // First try to get the user
+      const user = await fetchUserByIdentifier(trimmedId);
+      if (!user) {
+        const msg = 'User not found';
+        console.warn(msg);
+        message.warning(msg);
+        return;
+      }
+      
+      console.log('User found, fetching credit scores...');
+      
+      // Then fetch their credit scores
+      await fetchCreditScores(user);
+      
+    } catch (error) {
+      console.error('Error in fetchUserData:', error);
+      
+      let errorMessage = 'An error occurred while fetching user data';
+      
+      if (error.response) {
+        // Server responded with error status
+        if (error.response.status === 404) {
+          errorMessage = 'User not found';
+        } else if (error.response.status === 401) {
+          errorMessage = 'Unauthorized. Please log in again.';
+        } else if (error.response.status >= 500) {
+          errorMessage = 'Server error. Please try again later.';
+        }
+      } else if (error.request) {
+        // Request was made but no response
+        errorMessage = 'No response from server. Please check your connection.';
+      } else if (!navigator.onLine) {
+        errorMessage = 'You are offline. Please check your internet connection.';
+      }
+      
+      setError(errorMessage);
+      message.error(errorMessage);
+      setUserData(null);
+      
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return isNaN(date) ? 'Invalid Date' : date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  if (userData) {
+    const validCreditScores = userData.creditScores
+      .filter(score => typeof score.score === 'number')
+      .map(score => ({
+        ...score,
+        sortableDate: new Date(score.date)
+      }))
+      .sort((a, b) => b.sortableDate - a.sortableDate);
+
+    const columns = [
+      {
+        title: 'Date',
+        dataIndex: 'date',
+        key: 'date',
+        render: formatDate,
+        sorter: (a, b) => a.sortableDate - b.sortableDate,
+        defaultSortOrder: 'descend',
+        width: 200,
+      },
+      {
+        title: 'Score',
+        dataIndex: 'score',
+        key: 'score',
+        render: (score) => {
+          const displayScore = Math.min(Math.round(score), 999);
+          const color = score >= 700 ? '#52c41a' : score >= 600 ? '#faad14' : '#f5222d';
+          
+          return (
+            <div className="score-display">
+              <div className="score-circle" style={{ backgroundColor: color }}>
+                {displayScore}
+              </div>
+              <div>
+                <div className="score-value">{displayScore}</div>
+                <div className="score-category">
+                  {score >= 700 ? 'Excellent' : score >= 600 ? 'Good' : 'Needs Improvement'}
+                </div>
+              </div>
+            </div>
+          );
+        },
+        sorter: (a, b) => a.score - b.score,
+        width: 200,
+      },
+      {
+        title: 'Change',
+        key: 'change',
+        render: (_, record, index) => {
+          if (index === validCreditScores.length - 1) return 'N/A';
+          
+          const nextScore = validCreditScores[index + 1]?.score;
+          if (typeof nextScore !== 'number') return 'N/A';
+          
+          const change = record.score - nextScore;
+          return (
+            <span className={`change-indicator ${change >= 0 ? 'positive' : 'negative'}`}>
+              {change >= 0 ? '↑' : '↓'} 
+              {Math.abs(change)} pts
+            </span>
+          );
+        },
+        width: 150,
+      },
+      {
+        title: 'Status',
+        key: 'status',
+        render: (_, record) => {
+          const { score } = record;
+          let status, color;
+          
+          if (score >= 700) {
+            status = 'Excellent';
+            color = 'green';
+          } else if (score >= 600) {
+            status = 'Good';
+            color = 'orange';
+          } else {
+            status = 'Needs Improvement';
+            color = 'red';
+          }
+          
+          return <Tag color={color}>{status}</Tag>;
+        },
+        filters: [
+          { text: 'Excellent (700+)', value: 700 },
+          { text: 'Good (600-699)', value: 600 },
+          { text: 'Needs Improvement (<600)', value: 599 },
+        ],
+        onFilter: (value, record) => value === 700 
+          ? record.score >= 700 
+          : value === 600 
+            ? record.score >= 600 && record.score < 700 
+            : record.score < 600,
+        width: 180,
+      },
+    ];
+      
+    return (
+      <Card 
+        title={
+          <div className="card-header">
+            <Button 
+              type="text" 
+              icon={<ArrowLeftOutlined />} 
+              onClick={() => setUserData(null)}
+            />
+            <span>User Credit Data</span>
+          </div>
+        }
+        className="user-data-card"
+      >
+        <div className="user-info-grid">
+          <Card title="User Information" className="user-info-card">
+            <div className="user-info-grid">
+              <div className="info-item">
+                <div className="info-label">Name</div>
+                <div className="info-value">{userData.user.name}</div>
+              </div>
+              <div className="info-item">
+                <div className="info-label">Email</div>
+                <div className="info-value">{userData.user.email}</div>
+              </div>
+              <div className="info-item">
+                <div className="info-label">User ID</div>
+                <div className="info-value">
+                  <code>{userData.user._id}</code>
+                </div>
+              </div>
+              <div className="info-item">
+                <div className="info-label">Role</div>
+                <div className="info-value">
+                  <Tag color={userData.user.role === 'admin' ? 'gold' : 'blue'}>
+                    {userData.user.role}
+                  </Tag>
+                </div>
+              </div>
+            </div>
+          </Card>
+          
+          <Card 
+            title={
+              <div className="score-header">
+                <span>Credit Score</span>
+                <Tooltip title="Credit scores range from 300-850">
+                  <QuestionCircleOutlined />
+                </Tooltip>
+              </div>
+            }
+            className="score-card"
+          >
+            {userData.currentScore !== null ? (
+              <div className="current-score">
+                <div className="score-circle-large">
+                  {userData.currentScore}
+                </div>
+                <div className="score-category">
+                  {userData.currentScore >= 700 ? 'Excellent' : 
+                   userData.currentScore >= 600 ? 'Good' : 'Needs Improvement'}
+                </div>
+                {validCreditScores[0]?.date && (
+                  <div className="score-update-date">
+                    Updated: {formatDate(validCreditScores[0].date)}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="no-score">
+                <div className="no-score-title">No Credit Score Available</div>
+                <div className="no-score-description">
+                  This user doesn't have any credit scores yet
+                </div>
+                {userData.user.role === 'admin' && (
+                  <Button type="primary">
+                    Upload Credit Data
+                  </Button>
+                )}
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <Card title="Credit Score History" className="history-card">
+          {validCreditScores.length > 0 ? (
+            <Table 
+              dataSource={validCreditScores}
+              columns={columns}
+              rowKey="key"
+              loading={loading}
+              pagination={{
+                pageSize: 5,
+                showSizeChanger: true,
+                pageSizeOptions: ['5', '10', '20', '50'],
+                showTotal: (total) => `${total} scores`
+              }}
+              locale={{ emptyText: 'No history available' }}
+            />
+          ) : (
+            <div className="empty-history">
+              No credit score history available
+            </div>
+          )}
+        </Card>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="search-card">
+      <div className="search-container">
+        <div className="search-box">
+          <h3>Search User Credit Data</h3>
+          <div className="search-controls">
+            <Input
+              placeholder="User ID or email"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              prefix={<UserOutlined />}
+              onPressEnter={() => fetchUserData()}
+              disabled={loading}
+              allowClear
+            />
+            <Button 
+              type="primary" 
+              icon={<SearchOutlined />} 
+              onClick={fetchUserData}
+              loading={loading}
+            >
+              Search
+            </Button>
+          </div>
+          <p className="search-tip">
+            Enter user ID or email to view credit history
+          </p>
+        </div>
+        
+        <div className="info-box">
+          <InfoCircleOutlined />
+          <div>
+            <strong>Search Tips</strong>
+            <ul>
+              <li>User IDs are 24-character hexadecimal strings</li>
+              <li>Emails must be in valid format</li>
+              <li>Admin users can view all accounts</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+};
+
+export default UserDataViewer;

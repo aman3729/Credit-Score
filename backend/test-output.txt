@@ -1,0 +1,10 @@
+=== Starting Test ===
+Node.js version: v22.14.0
+Current directory: C:\Users\amannn\Pictures\credit-score-dashboard\backend
+
+=== Environment Variables ===
+Loading .env from: C:/Users/amannn/Pictures/credit-score-dashboard/backend/.env
+✅ .env file loaded successfully
+MONGODB_URI: ***
+JWT_SECRET: ***
+NODE_ENV: development

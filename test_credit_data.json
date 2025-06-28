@@ -1,0 +1,18 @@
+[
+    {
+        "email": "amanabraham724@gmail.com",
+        "paymentHistory": 0.95,
+        "creditUtilization": 0.3,
+        "creditAge": 0.35,
+        "creditMix": 0.8,
+        "inquiries": 0.2,
+        "totalDebt": 15000,
+        "totalCredit": 50000,
+        "monthlyIncome": 5000,
+        "recentMissedPayments": 0,
+        "recentDefaults": 0,
+        "lastActiveDate": "2025-06-20",
+        "source": "Bank",
+        "notes": "Good standing"
+    }
+]

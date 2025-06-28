@@ -1,0 +1,91 @@
+import React, { useState } from 'react';
+import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import { toast } from '../hooks/use-toast';
+
+const Login = () => {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const { login } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setIsLoading(true);
+    
+    try {
+      await login(email, password);
+      toast({
+        title: 'Success',
+        description: 'Logged in successfully!',
+        variant: 'success',
+      });
+      navigate('/dashboard'); // Redirect to dashboard after successful login
+    } catch (error) {
+      console.error('Login error:', error);
+      let errorMessage = 'Failed to login. Please check your credentials.';
+      
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        console.error('Response data:', error.response.data);
+        console.error('Response status:', error.response.status);
+        errorMessage = error.response.data?.message || error.response.data?.error || errorMessage;
+      } else if (error.request) {
+        // The request was made but no response was received
+        console.error('No response received:', error.request);
+        errorMessage = 'No response from server. Please check if the backend is running.';
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        console.error('Error message:', error.message);
+        errorMessage = error.message || errorMessage;
+      }
+      
+      setError(errorMessage);
+      toast({
+        title: 'Error',
+        description: errorMessage,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto p-6 mt-20 bg-white rounded-xl shadow space-y-4">
+      <h2 className="text-2xl font-bold">Login</h2>
+      {error && <p className="text-red-600">{error}</p>}
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <input
+          type="email"
+          className="w-full border p-2 rounded"
+          placeholder="Email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          required
+        />
+        <input
+          type="password"
+          className="w-full border p-2 rounded"
+          placeholder="Password"
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          required
+        />
+        <button 
+          type="submit" 
+          className="bg-purple-600 text-white py-2 px-4 rounded w-full disabled:opacity-50"
+          disabled={isLoading}
+        >
+          {isLoading ? 'Logging in...' : 'Log In'}
+        </button>
+      </form>
+    </div>
+  );
+};
+
+export default Login;

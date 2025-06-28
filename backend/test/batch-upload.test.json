@@ -1,0 +1,26 @@
+[
+  {
+    "email": "user1@example.com",
+    "paymentHistory": 0.95,
+    "creditUtilization": 0.25,
+    "creditAge": 0.12,
+    "creditMix": 0.1,
+    "inquiries": 0.02
+  },
+  {
+    "email": "user2@example.com",
+    "paymentHistory": 0.7,
+    "creditUtilization": 0.4,
+    "creditAge": 0.1,
+    "creditMix": 0.2,
+    "inquiries": 0.15
+  },
+  {
+    "email": "test@example.com",
+    "paymentHistory": 0.8,
+    "creditUtilization": 0.3,
+    "creditAge": 0.15,
+    "creditMix": 0.15,
+    "inquiries": 0.1
+  }
+]

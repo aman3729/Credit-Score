@@ -1,0 +1,16 @@
+{
+  "name": "credit-score-dashboard",
+  "version": "1.0.0",
+  "description": "Credit Score Dashboard Application",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  },
+  "dependencies": {
+    "joi": "^17.13.3"
+  }
+}

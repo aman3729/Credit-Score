@@ -1,0 +1,62 @@
+doctype html
+html
+  head
+    style.
+      body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+      .header { text-align: center; padding: 20px 0; }
+      .content { padding: 20px; background-color: #f9f9f9; border-radius: 5px; }
+      .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+      .footer { margin-top: 20px; font-size: 12px; text-align: center; color: #777; }
+      .score { 
+        font-size: 36px; 
+        font-weight: bold; 
+        text-align: center; 
+        margin: 20px 0;
+        color: #4CAF50;
+      }
+      .change {
+        text-align: center;
+        font-weight: bold;
+        margin: 10px 0;
+      }
+      .improvement { color: #4CAF50; }
+      .decline { color: #f44336; }
+  body
+    .header
+      h1 Your Credit Score Has Been Updated
+    .content
+      p Hello #{name},
+      p We wanted to let you know that there has been a change to your credit score.
+      
+      .score #{score}
+      
+      if previousScore
+        - var scoreChange = score - previousScore;
+        if scoreChange > 0
+          .change.improvement
+            | ▲ #{Math.abs(scoreChange)} points increase from #{previousScore}
+        else if scoreChange < 0
+          .change.decline
+            | ▼ #{Math.abs(scoreChange)} points decrease from #{previousScore}
+        else
+          .change No change from previous score
+      
+      p(style="text-align: center;")
+        a.button(href=url) View Details on Dashboard
+      
+      p Understanding your credit score is important. Here are some factors that might have affected your score:
+      ul
+        li Payment history
+        li Credit utilization
+        li Length of credit history
+        li New credit inquiries
+        li Credit mix
+      
+      p If you have any questions about your credit score or how to improve it, please don't hesitate to reach out to our support team.
+      
+      p Best regards,
+        br
+        | The Credit Score Dashboard Team
+    .footer
+      p © #{new Date().getFullYear()} Credit Score Dashboard. All rights reserved.
+      p This is an automated message. Please do not reply to this email.

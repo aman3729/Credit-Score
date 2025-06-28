@@ -1,0 +1,31 @@
+doctype html
+html
+  head
+    style.
+      body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+      .header { text-align: center; padding: 20px 0; }
+      .content { padding: 20px; background-color: #f9f9f9; border-radius: 5px; }
+      .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+      .footer { margin-top: 20px; font-size: 12px; text-align: center; color: #777; }
+  body
+    .header
+      h1 Welcome to Credit Score Dashboard!
+    .content
+      p Hello #{name},
+      p Thank you for signing up for Credit Score Dashboard. We're excited to have you on board!
+      p With our platform, you can:
+      ul
+        li Track your credit score over time
+        li Get personalized tips to improve your credit
+        li Monitor changes to your credit report
+        li Set up alerts for important changes
+      p To get started, click the button below to access your dashboard:
+      p(style="text-align: center;")
+        a.button(href=url) Go to Dashboard
+      p If you have any questions, feel free to reply to this email or contact our support team.
+      p Best regards,
+        br
+        | The Credit Score Dashboard Team
+    .footer
+      p © #{new Date().getFullYear()} Credit Score Dashboard. All rights reserved.
+      p If you didn't create an account, please ignore this email.

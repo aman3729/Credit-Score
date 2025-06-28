@@ -1,0 +1,3 @@
+email,nationalId,phoneNumber,score,creditLimit,balance,utilization,inquiries,accountAge
+john@example.com,1234567890,0911223344,720,10000,2000,20,2,3
+sara@example.com,0987654321,0911556677,640,15000,3000,25,1,5

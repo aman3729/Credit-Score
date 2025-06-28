@@ -1,0 +1,44 @@
+[
+  {
+    "email": "test1@example.com",
+    "paymentHistory": 0.95,
+    "creditUtilization": 0.3,
+    "creditAge": 5.5,
+    "creditMix": 0.8,
+    "inquiries": 0.2,
+    "totalDebt": 5000,
+    "totalCredit": 10000,
+    "monthlyIncome": 5000,
+    "recentMissedPayments": 0,
+    "recentDefaults": 0,
+    "lastActiveDate": "2025-06-20"
+  },
+  {
+    "email": "test2@example.com",
+    "paymentHistory": 0.85,
+    "creditUtilization": 0.4,
+    "creditAge": 3.2,
+    "creditMix": 0.7,
+    "inquiries": 0.3,
+    "totalDebt": 8000,
+    "totalCredit": 15000,
+    "monthlyIncome": 6000,
+    "recentMissedPayments": 1,
+    "recentDefaults": 0,
+    "lastActiveDate": "2025-06-19"
+  },
+  {
+    "email": "test3@example.com",
+    "paymentHistory": 0.75,
+    "creditUtilization": 0.5,
+    "creditAge": 2.1,
+    "creditMix": 0.6,
+    "inquiries": 0.4,
+    "totalDebt": 12000,
+    "totalCredit": 20000,
+    "monthlyIncome": 7000,
+    "recentMissedPayments": 2,
+    "recentDefaults": 1,
+    "lastActiveDate": "2025-06-18"
+  }
+]

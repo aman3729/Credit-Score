@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "openai": "^5.5.1",
+    "rate-limiter-flexible": "^7.1.1"
+  }
+}

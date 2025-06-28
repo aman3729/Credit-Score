@@ -1,0 +1,16 @@
+[
+  {
+    "email": "test@example.com",
+    "paymentHistory": 0.95,
+    "creditUtilization": 0.3,
+    "creditAge": 5,
+    "creditMix": 0.8,
+    "inquiries": 0.2,
+    "totalDebt": 5000,
+    "totalCredit": 10000,
+    "monthlyIncome": 5000,
+    "recentMissedPayments": 0,
+    "recentDefaults": 0,
+    "lastActiveDate": "2025-06-20T00:00:00.000Z"
+  }
+]
