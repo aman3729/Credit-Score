@@ -3,7 +3,12 @@ import mongoose from 'mongoose';
 import User from '../models/User.js';
 import bcrypt from 'bcryptjs';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://aman:49b1HtpesbsJfZnz@credit-score-dashboard.w2bwj1o.mongodb.net/?retryWrites=true&w=majority&appName=credit-score-dashboard';
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI is not defined in environment variables');
+  process.exit(1);
+}
 
 const createAdminUser = async () => {
   try {
@@ -32,7 +37,8 @@ const createAdminUser = async () => {
       password: 'Admin123!',
       role: 'admin',
       emailVerified: true,
-      status: 'active'
+      status: 'active',
+      nationalId: '1234567890123456'
     };
 
     // Create user (password will be hashed by the User model pre-save hook)

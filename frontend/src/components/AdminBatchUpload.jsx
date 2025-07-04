@@ -46,11 +46,19 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
     const errors = [];
     
     // Check file type
-    const isJSON = file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
-    const isCSV = file.type === 'text/csv' || 
-                 file.name.toLowerCase().endsWith('.csv') ||
-                 file.type === 'application/vnd.ms-excel';
+    const validTypes = [
+      'application/json', 
+      'text/csv', 
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ];
     
+    const isJSON = file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
+    const isCSV = file.type.includes('csv') || 
+                 file.name.toLowerCase().endsWith('.csv') ||
+                 file.type.includes('excel') ||
+                 file.type.includes('spreadsheet');
+
     if (!isJSON && !isCSV) {
       errors.push('Only JSON and CSV files are supported');
     }
@@ -66,7 +74,8 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
   };
 
   const beforeUpload = (file) => {
-    if (!validateFile(file)) {
+    const isValid = validateFile(file);
+    if (!isValid) {
       message.error('Invalid file. Please check the file requirements.');
       return Upload.LIST_IGNORE;
     }
@@ -100,7 +109,7 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
     return false; // Prevent auto upload
   };
 
-  const processFailedRecords = async (failedItems) => {
+  const processFailedRecords = useCallback(async (failedItems) => {
     if (!failedItems.length || retryAttempts >= MAX_RETRY_ATTEMPTS) {
       setFailedRecords(failedItems);
       return false;
@@ -130,34 +139,37 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
             headers: { 'Content-Type': 'multipart/form-data' }
           });
           
+          const {
+            successCount = 0,
+            errorCount = 0,
+            failedRecords: newFailedRecords = []
+          } = response.data;
+          
           // Update results with retry data
           setResults(prev => ({
             ...prev,
-            success: (prev.success || 0) + (response.data.success || 0),
-            errors: (response.data.errors || 0) + (failedItems.length - (response.data.success || 0)),
-            results: [
-              ...(prev.results || []).filter(r => r.status !== 'failed'),
-              ...(response.data.results || [])
-            ]
+            success: (prev.success || 0) + successCount,
+            errors: errorCount
           }));
           
-          // If there are still failures after retry, show them
-          const newFailures = (response.data.results || []).filter(r => r.status === 'failed');
-          if (newFailures.length > 0) {
-            setFailedRecords(newFailures);
+          // Update failed records
+          setFailedRecords(newFailedRecords);
+          
+          if (newFailedRecords.length > 0) {
+            message.warning(`${successCount} records succeeded, ${newFailedRecords.length} still failed`);
           } else {
             message.success('All records processed successfully!');
           }
         } catch (error) {
           console.error('Retry failed:', error);
-          message.error(`Retry failed: ${error.message}`);
+          message.error(`Retry failed: ${error.message || 'Unknown error'}`);
         }
       },
       onCancel: () => {
         setFailedRecords(failedItems);
       },
     });
-  };
+  }, [retryAttempts, useAI]);
 
   const handleUpload = async () => {
     if (!file) {
@@ -191,9 +203,25 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
             throw new Error('File must contain an array of records');
           }
           
-          // Simple validation for required fields
-          const requiredFields = ['email', 'paymentHistory', 'creditUtilization', 'creditAge'];
-          const invalidRecords = data.filter(record => 
+          // Normalize phone number field for all records
+          const normalizedData = data.map(record => {
+            if (record['phone number'] && !record['phoneNumber']) {
+              return { ...record, phoneNumber: record['phone number'] };
+            }
+            return record;
+          });
+
+          // Accept any record with all required fields, allow all optional fields
+          const requiredFields = [
+            'phoneNumber',
+            'paymentHistory',
+            'creditUtilization',
+            'creditAge',
+            'creditMix',
+            'inquiries',
+            'totalDebt'
+          ];
+          const invalidRecords = normalizedData.filter(record =>
             !requiredFields.every(field => record[field] !== undefined)
           );
           
@@ -201,7 +229,7 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
             throw new Error(`Found ${invalidRecords.length} records missing required fields`);
           }
           
-          message.info(`Found ${data.length} valid records to process`);
+          message.info(`Found ${normalizedData.length} valid records to process`);
           
         } catch (parseError) {
           console.error('Invalid data in file:', parseError);
@@ -249,8 +277,13 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
       console.log(`Upload completed in ${uploadTime}s`, response.data);
       
       // Process response
-      const { successCount, errorCount, totalRecords, uploadId } = response.data;
-      const failedItems = []; // We don't have individual failed items in the current response
+      const { 
+        successCount = 0, 
+        errorCount = 0, 
+        totalRecords = 0,
+        uploadId,
+        failedRecords: backendFailedRecords = [], 
+      } = response.data;
       
       // Update UI with results
       setResults({
@@ -263,18 +296,14 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
       
       if (errorCount === 0) {
         message.success(`Successfully processed ${successCount} records in ${uploadTime}s`);
-      } else if (successCount > 0) {
-        message.warning(
-          `Processed ${successCount} records successfully, but ${errorCount} failed`,
-          5 // Show for 5 seconds
-        );
       } else {
-        message.error('Failed to process any records. Please check the file format and try again.');
+        message.warning(`${successCount} records succeeded, ${errorCount} failed. See details below.`);
       }
       
       // Handle failed records with retry logic
-      if (failedItems.length > 0) {
-        await processFailedRecords(failedItems);
+      if (backendFailedRecords.length > 0) {
+        setFailedRecords(backendFailedRecords);
+        await processFailedRecords(backendFailedRecords);
       }
       
       if (onUploadComplete) {
@@ -305,6 +334,7 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
     setFile(null);
     setResults(null);
     setProgress(0);
+    setValidationErrors([]);
   };
 
   const renderFilePreview = () => {
@@ -385,28 +415,41 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
                           <pre style={{ backgroundColor: '#f5f5f5', padding: 16, borderRadius: 4 }}>
 {`[
   {
-    "email": "user@example.com",
+    "phoneNumber": "0954880513",
     "paymentHistory": 0.95,
-    "creditUtilization": 0.3,
-    "creditAge": 5,
-    "creditMix": 0.8,
-    "inquiries": 2,
-    "totalDebt": 5000,
+    "creditUtilization": 0.2,
+    "creditAge": 0.85,
+    "creditMix": 0.7,
+    "inquiries": 1,
+    "totalDebt": 10000,
+    // --- Optional fields below ---
     "totalCredit": 20000,
     "monthlyIncome": 5000,
-    "recentMissedPayments": 0,
+    "recentMissedPayments": 1,
     "recentDefaults": 0,
-    "lastActiveDate": "2023-01-01"
-  },
-  // ... more records
+    "lastActiveDate": "2024-12-01",
+    "activeLoanCount": 3,
+    "oldestAccountAge": 60,
+    "transactionsLast90Days": 40,
+    "onTimePaymentRate": 0.94,
+    "onTimeRateLast6Months": 0.96,
+    "missedPaymentsLast12": 1,
+    "recentLoanApplications": 2,
+    "defaultCountLast3Years": 0,
+    "consecutiveMissedPayments": 0,
+    "monthsSinceLastDelinquency": 8,
+    "loanTypeCounts": { "creditCard": 2, "carLoan": 1 },
+    "employmentStatus": "employed",
+    "collateralValue": 0,
+    "notes": "Sample user"
+  }
 ]`}
                           </pre>
                           <p style={{ marginTop: 16 }}>
-                            <strong>Required Fields:</strong> email, paymentHistory, creditUtilization, creditAge
+                            <strong>Required Fields:</strong> phoneNumber (or phone number), paymentHistory, creditUtilization, creditAge, creditMix, inquiries, totalDebt
                           </p>
                           <p>
-                            <strong>Optional Fields:</strong> creditMix, inquiries, totalDebt, totalCredit, 
-                            monthlyIncome, recentMissedPayments, recentDefaults, lastActiveDate
+                            <strong>Optional Fields:</strong> totalCredit, monthlyIncome, recentMissedPayments, recentDefaults, lastActiveDate, activeLoanCount, oldestAccountAge, transactionsLast90Days, onTimePaymentRate, onTimeRateLast6Months, missedPaymentsLast12, recentLoanApplications, defaultCountLast3Years, consecutiveMissedPayments, monthsSinceLastDelinquency, loanTypeCounts, employmentStatus, collateralValue, notes
                           </p>
                         </div>
                       ),
@@ -480,18 +523,27 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
             icon={<DownloadOutlined />}
             onClick={() => {
               const template = [{
-                email: 'user@example.com',
+                "phone number": "0954880513",
                 paymentHistory: 0.95,
-                creditUtilization: 0.3,
-                creditAge: 5,
-                creditMix: 0.8,
-                inquiries: 2,
-                totalDebt: 5000,
-                totalCredit: 20000,
-                monthlyIncome: 5000,
-                recentMissedPayments: 0,
+                creditUtilization: 0.2,
+                creditAge: 0.85,
+                creditMix: 0.7,
+                inquiries: 1,
+                totalDebt: 10000,
+                recentMissedPayments: 1,
                 recentDefaults: 0,
-                lastActiveDate: '2023-01-01'
+                lastActiveDate: "2024-12-01",
+                activeLoanCount: 3,
+                oldestAccountAge: 60,
+                transactionsLast90Days: 40,
+                onTimePaymentRate: 0.94,
+                onTimeRateLast6Months: 0.96,
+                missedPaymentsLast12: 1,
+                recentLoanApplications: 2,
+                defaultCountLast3Years: 0,
+                consecutiveMissedPayments: 0,
+                monthsSinceLastDelinquency: 8,
+                loanTypeCounts: { creditCard: 2, carLoan: 1 }
               }];
               
               const blob = new Blob([JSON.stringify(template, null, 2)], { type: 'application/json' });
@@ -599,7 +651,7 @@ const AdminBatchUpload = ({ onClose, onUploadComplete }) => {
                               <div style={{ width: '100%' }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                   <span>
-                                    <strong>{item.email || `Record ${index + 1}`}</strong>
+                                    <strong>{item["phone number"] || `Record ${index + 1}`}</strong>
                                     {item.rowNumber && ` (Row ${item.rowNumber})`}
                                   </span>
                                   <Tag color="error">Failed</Tag>

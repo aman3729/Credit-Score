@@ -14,6 +14,8 @@ import {
 import { logger } from '../config/logger.js';
 import catchAsync from '../utils/catchAsync.js';
 import AppError from '../utils/appError.js';
+import { generateReasoning, generateScoreBreakdownReasoning, generateLendingReasoning, generateImprovementSuggestions } from '../utils/reasoningEngine.js';
+import LoanDecision from '../models/LoanDecision.js';
 
 const router = express.Router();
 
@@ -34,6 +36,91 @@ router.post('/calculate', protect, calculateCreditScore);
  * @access  Private
  */
 router.post('/', protect, saveCreditScore);
+
+// ========================
+// Reasoning Engine Endpoints
+// ========================
+
+/**
+ * @desc    Generate credit reasoning and insights
+ * @route   POST /api/v1/credit-scores/reasoning
+ * @access  Private
+ */
+router.post('/reasoning', protect, catchAsync(async (req, res, next) => {
+  const { userData, scoreResult, lendingDecision } = req.body;
+  
+  if (!userData || !scoreResult) {
+    return next(new AppError('Missing required data: userData and scoreResult are required', 400));
+  }
+
+  // Generate comprehensive reasoning
+  const reasoning = generateReasoning(userData, scoreResult, lendingDecision);
+  
+  res.json({
+    status: 'success',
+    data: reasoning
+  });
+}));
+
+/**
+ * @desc    Generate score breakdown reasoning
+ * @route   POST /api/v1/credit-scores/breakdown-reasoning
+ * @access  Private
+ */
+router.post('/breakdown-reasoning', protect, catchAsync(async (req, res, next) => {
+  const { breakdown } = req.body;
+  
+  if (!breakdown) {
+    return next(new AppError('Missing breakdown data', 400));
+  }
+
+  const analysis = generateScoreBreakdownReasoning(breakdown);
+  
+  res.json({
+    status: 'success',
+    data: analysis
+  });
+}));
+
+/**
+ * @desc    Generate lending decision reasoning
+ * @route   POST /api/v1/credit-scores/lending-reasoning
+ * @access  Private
+ */
+router.post('/lending-reasoning', protect, catchAsync(async (req, res, next) => {
+  const { lendingDecision, userData } = req.body;
+  
+  if (!lendingDecision || !userData) {
+    return next(new AppError('Missing required data: lendingDecision and userData are required', 400));
+  }
+
+  const reasoning = generateLendingReasoning(lendingDecision, userData);
+  
+  res.json({
+    status: 'success',
+    data: reasoning
+  });
+}));
+
+/**
+ * @desc    Generate improvement suggestions
+ * @route   POST /api/v1/credit-scores/improvement-suggestions
+ * @access  Private
+ */
+router.post('/improvement-suggestions', protect, catchAsync(async (req, res, next) => {
+  const { userData, scoreResult } = req.body;
+  
+  if (!userData || !scoreResult) {
+    return next(new AppError('Missing required data: userData and scoreResult are required', 400));
+  }
+
+  const suggestions = generateImprovementSuggestions(userData, scoreResult);
+  
+  res.json({
+    status: 'success',
+    data: suggestions
+  });
+}));
 
 // ========================
 // Credit Score Management
@@ -186,5 +273,44 @@ router.get('/history/:userId', protect, getCreditScoreHistory);
  * @access  Private/Admin
  */
 router.get('/statistics', protect, authorize('admin'), getCreditScoreStatistics);
+
+router.get('/decision/:phone', async (req, res) => {
+  try {
+    const user = await User.findOne({ phoneNumber: req.params.phone });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const loanDecision = await LoanDecision.findOne({ userId: user._id });
+    // Extract loanOffer fields if present
+    let loanOffer = null;
+    if (loanDecision?.decision?.recommendation) {
+      const rec = loanDecision.decision.recommendation;
+      loanOffer = {
+        amount: rec.maxLoanAmount,
+        rate: rec.interestRate,
+        term: rec.termMonths,
+        monthlyPayment: rec.monthlyPayment || loanDecision.decision.monthlyPayment
+      };
+    }
+    // Log for debugging
+    console.log('LoanDecision for user:', user.phoneNumber, JSON.stringify(loanDecision, null, 2));
+    console.log('Extracted loanOffer:', loanOffer);
+    // Generate insight
+    let insight = '';
+    try {
+      insight = generateLendingReasoning(loanDecision?.decision, user.toObject());
+    } catch (e) {
+      insight = loanDecision?.decision?.reasons?.[0] || '';
+    }
+    res.json({
+      user: user.phoneNumber,
+      score: loanDecision?.creditScore,
+      decision: loanDecision?.decision?.decision,
+      loanOffer,
+      riskFlags: loanDecision?.decision?.riskFlags,
+      insight
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 export default router;

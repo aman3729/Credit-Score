@@ -1,11 +1,12 @@
-const crypto = require('crypto');
-const jwt = require('jsonwebtoken');
-const { promisify } = require('util');
-const User = require('../models/User');
-const AppError = require('../utils/appError');
-const catchAsync = require('../utils/catchAsync');
-const { sendWelcomeEmail, sendEmailVerificationEmail, sendPasswordResetEmail } = require('../utils/email');
-const { logger, securityLogger } = require('../config/logger');
+import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
+import { promisify } from 'util';
+import userService from '../services/userService.js';
+import AppError from '../utils/appError.js';
+import catchAsync from '../utils/catchAsync.js';
+import { sendWelcomeEmail, sendEmailVerificationEmail, sendPasswordResetEmail } from '../utils/email.js';
+import { logger, securityLogger } from '../config/logger.js';
+import bcrypt from 'bcryptjs';
 
 // Generate JWT token
 const signToken = (id) => {
@@ -45,27 +46,52 @@ const createSendToken = (user, statusCode, req, res) => {
 
 // User signup
 const signup = catchAsync(async (req, res, next) => {
+  console.log('Signup request body:', req.body);
+  
   // 1) Check if user already exists
-  const existingUser = await User.findOne({ email: req.body.email });
+  const existingUser = await userService.findByEmail(req.body.email);
   if (existingUser) {
     return next(new AppError('Email already in use', 400));
   }
+  
+  const existingUsername = await userService.findByUsername(req.body.username);
+  if (existingUsername) {
+    return next(new AppError('Username already in use', 400));
+  }
 
-  // 2) Create new user
-  const newUser = await User.create({
-    name: req.body.name,
-    email: req.body.email,
-    password: req.body.password,
-    passwordConfirm: req.body.passwordConfirm,
-    role: req.body.role || 'user',
+  // 2) Hash password
+  const hashedPassword = await bcrypt.hash(req.body.password, 12);
+
+  // 3) Create new user
+  let newUser;
+  try {
+    newUser = await userService.create({
+      name: req.body.name,
+      username: req.body.username,
+      email: req.body.email,
+      password: hashedPassword,
+      role: req.body.role || 'user',
+      status: 'pending',
+      emailVerified: false,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    });
+  } catch (error) {
+    console.log('User creation error:', error);
+    return next(new AppError(error.message, 400));
+  }
+
+  // 4) Generate email verification token
+  const verificationToken = crypto.randomBytes(32).toString('hex');
+  const emailVerificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+  await userService.updateById(newUser._id, {
+    emailVerificationToken: verificationToken,
+    emailVerificationTokenExpires
   });
 
-  // 3) Generate email verification token
-  const verificationToken = newUser.createEmailVerificationToken();
-  await newUser.save({ validateBeforeSave: false });
-
   try {
-    // 4) Send welcome email with verification link
+    // 5) Send welcome email with verification link
     const verificationURL = `${req.protocol}://${req.get('host')}/api/v1/auth/verify-email/${verificationToken}`;
     
     await sendWelcomeEmail({
@@ -74,18 +100,18 @@ const signup = catchAsync(async (req, res, next) => {
       verificationURL,
     });
     
-    // 5) Log the signup
+    // 6) Log the signup
     securityLogger.info('New user signed up', {
       userId: newUser._id,
       email: newUser.email,
       ip: req.ip,
     });
     
-    // 6) Send response
+    // 7) Send response
     createSendToken(newUser, 201, req, res);
   } catch (err) {
     // If email sending fails, remove the user and pass the error
-    await User.findByIdAndDelete(newUser._id);
+    await userService.updateById(newUser._id, { status: 'deactivated' });
     return next(
       new AppError('There was an error sending the email. Please try again later!', 500)
     );
@@ -102,15 +128,15 @@ const login = catchAsync(async (req, res, next) => {
   }
 
   // 2) Check if user exists && password is correct
-  const user = await User.findOne({ email }).select('+password');
+  const user = await userService.findByEmail(email);
   
-  if (!user || !(await user.correctPassword(password, user.password))) {
+  if (!user || !(await bcrypt.compare(password, user.password))) {
     securityLogger.warn('Failed login attempt', { email, ip: req.ip });
     return next(new AppError('Incorrect email or password', 401));
   }
 
   // 3) Check if email is verified (if required)
-  if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.isEmailVerified) {
+  if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.emailVerified) {
     return next(
       new AppError(
         'Please verify your email address before logging in. Check your email for the verification link.',
@@ -169,7 +195,7 @@ const protect = catchAsync(async (req, res, next) => {
   const decoded = await promisify(jwt.verify)(token, process.env.JWT_SECRET);
 
   // 3) Check if user still exists
-  const currentUser = await User.findById(decoded.id);
+  const currentUser = await userService.findById(decoded.id);
   if (!currentUser) {
     return next(
       new AppError('The user belonging to this token no longer exists.', 401)
@@ -213,14 +239,19 @@ const restrictTo = (...roles) => {
 // Forgot password
 const forgotPassword = catchAsync(async (req, res, next) => {
   // 1) Get user based on POSTed email
-  const user = await User.findOne({ email: req.body.email });
+  const user = await userService.findByEmail(req.body.email);
   if (!user) {
     return next(new AppError('There is no user with that email address.', 404));
   }
 
   // 2) Generate the random reset token
-  const resetToken = user.createPasswordResetToken();
-  await user.save({ validateBeforeSave: false });
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  const resetTokenExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+  await userService.updateById(user._id, {
+    passwordResetToken: resetToken,
+    passwordResetExpires: resetTokenExpires
+  });
 
   // 3) Send it to user's email
   try {
@@ -243,9 +274,10 @@ const forgotPassword = catchAsync(async (req, res, next) => {
       message: 'Token sent to email!',
     });
   } catch (err) {
-    user.passwordResetToken = undefined;
-    user.passwordResetExpires = undefined;
-    await user.save({ validateBeforeSave: false });
+    await userService.updateById(user._id, {
+      passwordResetToken: undefined,
+      passwordResetExpires: undefined
+    });
 
     securityLogger.error('Error sending password reset email', {
       userId: user._id,
@@ -264,45 +296,42 @@ const forgotPassword = catchAsync(async (req, res, next) => {
 // Reset password
 const resetPassword = catchAsync(async (req, res, next) => {
   // 1) Get user based on the token
-  const hashedToken = crypto
-    .createHash('sha256')
-    .update(req.params.token)
-    .digest('hex');
+  const resetToken = req.params.token;
 
-  const user = await User.findOne({
-    passwordResetToken: hashedToken,
-    passwordResetExpires: { $gt: Date.now() },
-  });
+  const user = await userService.findByPasswordResetToken(resetToken);
 
   // 2) If token has not expired, and there is user, set the new password
-  if (!user) {
+  if (!user || user.passwordResetExpires < Date.now()) {
     return next(new AppError('Token is invalid or has expired', 400));
   }
   
-  user.password = req.body.password;
-  user.passwordConfirm = req.body.passwordConfirm;
-  user.passwordResetToken = undefined;
-  user.passwordResetExpires = undefined;
-  await user.save();
+  // 3) Update user document
+  const newPassword = req.body.password;
+  const hashedPassword = await bcrypt.hash(newPassword, 12);
+  await userService.updateById(user._id, {
+    password: hashedPassword,
+    passwordResetToken: undefined,
+    passwordResetExpires: undefined
+  });
 
-  // 3) Log the password reset
+  // 4) Log the password reset
   securityLogger.info('Password reset successful', {
     userId: user._id,
     email: user.email,
     ip: req.ip,
   });
 
-  // 4) Log the user in, send JWT
+  // 5) Log the user in, send JWT
   createSendToken(user, 200, req, res);
 });
 
 // Update password
 const updatePassword = catchAsync(async (req, res, next) => {
   // 1) Get user from collection
-  const user = await User.findById(req.user.id).select('+password');
+  const user = await userService.findById(req.user.id);
 
   // 2) Check if POSTed current password is correct
-  if (!(await user.correctPassword(req.body.passwordCurrent, user.password))) {
+  if (!(await bcrypt.compare(req.body.passwordCurrent, user.password))) {
     securityLogger.warn('Incorrect current password provided', {
       userId: user._id,
       ip: req.ip,
@@ -312,9 +341,11 @@ const updatePassword = catchAsync(async (req, res, next) => {
   }
 
   // 3) If so, update password
-  user.password = req.body.password;
-  user.passwordConfirm = req.body.passwordConfirm;
-  await user.save();
+  const newPassword = req.body.password;
+  const hashedPassword = await bcrypt.hash(newPassword, 12);
+  await userService.updateById(user._id, {
+    password: hashedPassword
+  });
   
   // 4) Log the password change
   securityLogger.info('Password updated successfully', {
@@ -329,26 +360,21 @@ const updatePassword = catchAsync(async (req, res, next) => {
 // Verify email
 const verifyEmail = catchAsync(async (req, res, next) => {
   // 1) Get user based on the token
-  const hashedToken = crypto
-    .createHash('sha256')
-    .update(req.params.token)
-    .digest('hex');
+  const verificationToken = req.params.token;
 
-  const user = await User.findOne({
-    emailVerificationToken: hashedToken,
-    emailVerificationExpires: { $gt: Date.now() },
-  });
+  const user = await userService.findByEmailVerificationToken(verificationToken);
 
   // 2) If token has not expired, and there is user, verify the email
-  if (!user) {
+  if (!user || user.emailVerificationExpires < Date.now()) {
     return next(new AppError('Token is invalid or has expired', 400));
   }
 
   // 3) Update user document
-  user.isEmailVerified = true;
-  user.emailVerificationToken = undefined;
-  user.emailVerificationExpires = undefined;
-  await user.save({ validateBeforeSave: false });
+  await userService.updateById(user._id, {
+    emailVerified: true,
+    emailVerificationToken: undefined,
+    emailVerificationExpires: undefined
+  });
   
   // 4) Log the email verification
   securityLogger.info('Email verified successfully', {
@@ -368,19 +394,24 @@ const resendVerificationEmail = catchAsync(async (req, res, next) => {
   const { email } = req.body;
   
   // 1) Get user based on email
-  const user = await User.findOne({ email });
+  const user = await userService.findByEmail(email);
   if (!user) {
     return next(new AppError('No user found with that email address.', 404));
   }
   
   // 2) Check if email is already verified
-  if (user.isEmailVerified) {
+  if (user.emailVerified) {
     return next(new AppError('Email is already verified.', 400));
   }
   
   // 3) Generate new verification token
-  const verificationToken = user.createEmailVerificationToken();
-  await user.save({ validateBeforeSave: false });
+  const verificationToken = crypto.randomBytes(32).toString('hex');
+  const emailVerificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
+  await userService.updateById(user._id, {
+    emailVerificationToken: verificationToken,
+    emailVerificationTokenExpires
+  });
   
   try {
     // 4) Send verification email
@@ -404,9 +435,10 @@ const resendVerificationEmail = catchAsync(async (req, res, next) => {
       message: 'Verification email sent!',
     });
   } catch (err) {
-    user.emailVerificationToken = undefined;
-    user.emailVerificationExpires = undefined;
-    await user.save({ validateBeforeSave: false });
+    await userService.updateById(user._id, {
+      emailVerificationToken: undefined,
+      emailVerificationTokenExpires: undefined
+    });
     
     securityLogger.error('Error sending verification email', {
       userId: user._id,
@@ -422,7 +454,7 @@ const resendVerificationEmail = catchAsync(async (req, res, next) => {
   }
 });
 
-module.exports = {
+export {
   signup,
   login,
   logout,

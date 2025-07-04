@@ -9,7 +9,12 @@ const __dirname = dirname(__filename);
 dotenv.config({ path: `${__dirname}/../../.env` });
 
 // Connection URI with enhanced logging - match the exact connection string from backend config
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://aman:vpd6dbDAq3EigvwQ@credit-score-dashboard.w2bwj1o.mongodb.net/?retryWrites=true&w=majority&appName=credit-score-dashboard';
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI is not defined in environment variables');
+  process.exit(1);
+}
 
 // Explicitly set the database name to match backend config
 const DB_NAME = 'credit-score-dashboard';

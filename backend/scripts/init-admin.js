@@ -14,7 +14,7 @@ const ADMIN_USERNAME = 'admin';
 // Salt rounds for password hashing
 const SALT_ROUNDS = 10;
 
-async function initAdmin() {
+export async function initAdmin() {
   try {
     // Connect to MongoDB
     await mongoose.connect(process.env.MONGODB_URI);
@@ -54,5 +54,7 @@ async function initAdmin() {
   }
 }
 
-// Run the initialization
-initAdmin();
+// Run the initialization if this file is run directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+  initAdmin();
+}

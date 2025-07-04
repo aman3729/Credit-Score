@@ -27,7 +27,7 @@ const uploadHistorySchema = new mongoose.Schema({
     enum: ['pending', 'processing', 'completed', 'failed'],
     default: 'pending'
   },
-  errors: [{
+  errorList: [{
     row: Number,
     message: String,
     field: String,

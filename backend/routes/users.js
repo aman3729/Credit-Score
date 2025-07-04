@@ -280,4 +280,124 @@ router.patch(
   })
 );
 
+// @desc    Get user's credit data and scores (with scoreResult)
+// @route   GET /api/v1/users/:userId/credit-data
+// @access  Private
+router.get(
+  '/:userId/credit-data',
+  protect,
+  catchAsync(async (req, res, next) => {
+    console.log('DEBUG: /api/v1/users/:userId/credit-data route HIT', { params: req.params, user: req.user });
+    const { userId } = req.params;
+    // Only allow self or admin
+    if (userId !== req.user.id && req.user.role !== 'admin') {
+      return next(new AppError('You are not authorized to view this user', 403));
+    }
+    // Find user
+    const user = await User.findById(userId).select('-password -resetPasswordToken -resetPasswordExpire -__v').lean();
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    // Get latest credit report
+    const creditReport = await mongoose.model('CreditReport').findOne({ userId: user._id }).sort({ 'creditScore.fico.lastUpdated': -1, lastUpdated: -1 }).lean();
+    if (!creditReport || !creditReport.creditScore?.fico) {
+      return res.json({
+        success: true,
+        data: {
+          user: { ...user, creditScore: null, creditScoreLastUpdated: null },
+          creditScores: [],
+          currentScore: null,
+          factors: []
+        }
+      });
+    }
+    // Get all credit reports for history
+    const creditReports = await mongoose.model('CreditReport').find({ userId: user._id }).sort({ 'creditScore.fico.lastUpdated': 1, lastUpdated: 1, createdAt: 1 }).lean();
+    const creditScores = creditReports.map((report, index, array) => {
+      const score = report.creditScore.fico.score;
+      const date = new Date(report.creditScore.fico.lastUpdated || report.lastUpdated || report.createdAt || new Date());
+      const prevScore = index > 0 ? array[index - 1]?.creditScore?.fico?.score : null;
+      const change = prevScore !== null ? score - prevScore : 0;
+      return {
+        score,
+        date: date.toISOString(),
+        change: Math.round(change * 100) / 100,
+        reportId: report._id,
+        factors: report.creditScore?.factors || report.factors || []
+      };
+    });
+    // Prepare response
+    const responseData = {
+      success: true,
+      data: {
+        user,
+        creditScores,
+        currentScore: creditReport.creditScore.fico.score,
+        factors: creditReport.factors || [],
+        creditReport: {
+          id: creditReport._id,
+          lastUpdated: creditReport.lastUpdated || new Date().toISOString(),
+          hasFicoScore: !!creditReport.creditScore?.fico,
+          ficoScore: creditReport.creditScore?.fico?.score || null
+        },
+        monthlyIncome: creditReport.monthlyIncome ?? null,
+        totalDebt: creditReport.totalDebt ?? null,
+        recentMissedPayments: creditReport.recentMissedPayments ?? null,
+        recentDefaults: creditReport.recentDefaults ?? null,
+        creditUtilization: creditReport.creditUtilization ?? null,
+        creditMix: creditReport.creditMix ?? null,
+        creditAgeMonths: creditReport.creditAgeMonths ?? null,
+        totalAccounts: creditReport.totalAccounts ?? null,
+        openAccounts: creditReport.openAccounts ?? null,
+        paymentHistory: creditReport.paymentHistory ?? null,
+        creditAge: creditReport.creditAge ?? null
+      }
+    };
+    // Calculate scoreResult
+    const { calculateCreditScore } = await import('../utils/creditScoring.js');
+    const scoreInput = {
+      paymentHistory: creditReport.paymentHistory ?? 0,
+      creditUtilization: creditReport.creditUtilization ?? 1,
+      creditAge: creditReport.creditAge ?? 0,
+      creditMix: creditReport.creditMix ?? 0,
+      inquiries: creditReport.inquiries ?? 1,
+      activeLoanCount: creditReport.openAccounts ?? 0,
+    };
+    responseData.data.scoreResult = calculateCreditScore(scoreInput);
+
+    // --- Add lendingDecision using LoanCalculator ---
+    try {
+      const { LoanCalculator } = await import('../utils/LoanCalculator.js');
+      const scoreData = {
+        score: responseData.data.currentScore,
+        classification: responseData.data.scoreResult?.classification || 'Unknown',
+        version: responseData.data.scoreResult?.version || 'v101',
+      };
+      const userData = {
+        ...scoreInput,
+        onTimePaymentRate: creditReport.onTimePaymentRate ?? 1,
+        onTimeRateLast6Months: creditReport.onTimeRateLast6Months ?? 1,
+        loanTypeCounts: creditReport.loanTypeCounts ?? {},
+        missedPaymentsLast12: creditReport.missedPaymentsLast12 ?? 0,
+        recentLoanApplications: creditReport.recentLoanApplications ?? 0,
+        defaultCountLast3Years: creditReport.defaultCountLast3Years ?? 0,
+        consecutiveMissedPayments: creditReport.consecutiveMissedPayments ?? 0,
+        recentDefaults: creditReport.recentDefaults ?? 0,
+        monthsSinceLastDelinquency: creditReport.monthsSinceLastDelinquency ?? 999,
+        activeLoanCount: creditReport.openAccounts ?? 0,
+        monthlyIncome: creditReport.monthlyIncome ?? 0,
+        totalDebt: creditReport.totalDebt ?? 0,
+      };
+      const calculator = new LoanCalculator(scoreData, userData);
+      const lendingDecision = calculator.run();
+      responseData.data.lendingDecision = lendingDecision;
+    } catch (err) {
+      responseData.data.lendingDecision = { error: 'Failed to generate lending decision', details: err.message };
+    }
+
+    console.log('DEBUG: FINAL RESPONSE', JSON.stringify(responseData, null, 2));
+    res.json(responseData);
+  })
+);
+
 export default router;

@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { auth } from '../middleware/auth.js';
 import CreditReport from '../models/CreditReport.js';
 import User from '../models/User.js';
-import { evaluateLendingDecision } from '../utils/lendingDecision.js';
+import { LoanCalculator } from '../utils/LoanCalculator.js';
 
 const router = express.Router();
 
@@ -274,24 +274,19 @@ router.get('/credit-report/:userId', auth, async (req, res) => {
     
     // If no credit score found, try the old CreditReport method for backward compatibility
     console.log(`[Credit Report] No credit score found, trying legacy CreditReport method`);
-    const creditReport = await CreditReport.findOne({ userId })
-      .populate('userId', 'email name')
-      .lean();
-    
-    if (creditReport) {
-      console.log(`[Credit Report] Found legacy credit report`);
-      return res.json(creditReport);
+    let creditReport = await CreditReport.findOne({ userId });
+    if (!creditReport) {
+      // Try again with ObjectId if not found and userId is a valid ObjectId
+      if (mongoose.Types.ObjectId.isValid(userId)) {
+        creditReport = await CreditReport.findOne({ userId: new mongoose.Types.ObjectId(userId) });
+      }
     }
-    
-    // If still not found, return 404
-    const error = new Error('Credit report not found');
-    error.status = 404;
-    error.details = `No credit report or score exists for user ID: ${userId}`;
-    console.error('[Credit Report] Credit report not found:', error.details);
+    if (!creditReport) {
     return res.status(404).json({ 
-      error: error.message,
-      details: error.details
+        error: 'Credit report not found',
+        details: 'No credit report exists for this user'
     });
+    }
 
     // Remove sensitive data
     const { ssn, ...safeReport } = creditReport;
@@ -341,75 +336,146 @@ router.get('/fraud-check/:userId', auth, async (req, res) => {
 // Get lending decision for a specific user
 router.get('/lending-decision/:userId', auth, async (req, res) => {
   const { userId } = req.params;
-  
   try {
-    // Validate user ID format
     if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ 
-        error: 'Invalid user ID format',
-        details: 'The provided user ID is not a valid MongoDB ObjectId'
-      });
+      return res.status(400).json({ error: 'Invalid user ID format' });
     }
-
-    // Authorization check - lenders can only view their own decisions
     if (req.user.role !== 'admin' && req.user.id !== userId) {
-      return res.status(403).json({ 
-        error: 'Not authorized',
-        details: 'You can only view lending decisions for your own account'
-      });
+      return res.status(403).json({ error: 'Not authorized' });
     }
-
-    // Get user data with credit report
     const user = await User.findById(userId).lean();
     if (!user) {
-      return res.status(404).json({ 
-        error: 'User not found',
-        details: `No user found with ID: ${userId}`
-      });
+      return res.status(404).json({ error: 'User not found' });
     }
-
-    // Get credit report data
-    const creditReport = await CreditReport.findOne({ userId });
+    let creditReport = await CreditReport.findOne({ userId });
     if (!creditReport) {
-      return res.status(404).json({
-        error: 'Credit report not found',
-        details: 'No credit report exists for this user'
-      });
+      creditReport = await CreditReport.findOne({ userId: new mongoose.Types.ObjectId(userId) });
+    }
+    if (!creditReport) {
+      return res.status(404).json({ error: 'Credit report not found', details: 'No credit report exists for this user' });
     }
 
-    // Prepare data for decision making
-    const decisionData = {
-      ...user,
-      creditScore: creditReport.creditScore?.fico?.score,
-      totalDebt: creditReport.totalDebt || 0,
-      monthlyIncome: user.monthlyIncome || 0,
-      recentMissedPayments: creditReport.paymentHistory?.missedPayments || 0,
-      recentDefaults: creditReport.paymentHistory?.defaults || 0,
-      creditUtilization: creditReport.creditUtilization || 0,
-      creditAge: creditReport.creditAge || 0
+    // Try to return the most recent lending decision if it exists
+    let latestDecision = null;
+    if (Array.isArray(creditReport.lendingDecisionHistory) && creditReport.lendingDecisionHistory.length > 0) {
+      latestDecision = creditReport.lendingDecisionHistory[creditReport.lendingDecisionHistory.length - 1];
+    } else if (creditReport.lendingDecision) {
+      latestDecision = creditReport.lendingDecision;
+    }
+
+    if (latestDecision) {
+      return res.json({ success: true, userId, lendingDecision: latestDecision, evaluatedAt: latestDecision.timestamp || new Date() });
+    }
+
+    // Otherwise, generate a new decision as before
+    const scoreInput = {
+      paymentHistory: creditReport.paymentHistory ?? 0,
+      creditUtilization: creditReport.creditUtilization ?? 1,
+      creditAge: creditReport.creditAge ?? 0,
+      creditMix: creditReport.creditMix ?? 0,
+      inquiries: creditReport.inquiries ?? 1,
+      activeLoanCount: creditReport.openAccounts ?? 0,
     };
-
-    // Evaluate lending decision
-    const decision = evaluateLendingDecision(decisionData);
-
-    // Return the decision
-    res.json({
-      success: true,
-      userId,
-      decision: decision.decision,
-      creditScore: decision.scoreData?.score,
-      creditScoreClassification: decision.scoreData?.classification,
-      reasons: decision.reasons,
-      recommendations: decision.recommendations,
-      evaluatedAt: new Date()
-    });
-
+    const { LoanCalculator } = await import('../utils/LoanCalculator.js');
+    const scoreData = {
+      score: creditReport.creditScore?.fico?.score ?? 0,
+      classification: creditReport.creditScore?.classification ?? 'Unknown',
+      version: 'v101',
+    };
+    const userData = {
+      ...scoreInput,
+      onTimePaymentRate: creditReport.onTimePaymentRate ?? 1,
+      onTimeRateLast6Months: creditReport.onTimeRateLast6Months ?? 1,
+      loanTypeCounts: creditReport.loanTypeCounts ?? {},
+      missedPaymentsLast12: creditReport.missedPaymentsLast12 ?? 0,
+      recentLoanApplications: creditReport.recentLoanApplications ?? 0,
+      defaultCountLast3Years: creditReport.defaultCountLast3Years ?? 0,
+      consecutiveMissedPayments: creditReport.consecutiveMissedPayments ?? 0,
+      recentDefaults: creditReport.recentDefaults ?? 0,
+      monthsSinceLastDelinquency: creditReport.monthsSinceLastDelinquency ?? 999,
+      activeLoanCount: creditReport.openAccounts ?? 0,
+      monthlyIncome: creditReport.monthlyIncome ?? 0,
+      totalDebt: creditReport.totalDebt ?? 0,
+    };
+    const calculator = new LoanCalculator(scoreData, userData);
+    const lendingDecision = calculator.run();
+    lendingDecision.decision = lendingDecision.approved === true
+      ? 'Approve'
+      : (lendingDecision.approved === false ? 'Reject' : 'Review');
+    res.json({ success: true, userId, lendingDecision, evaluatedAt: new Date() });
   } catch (error) {
-    console.error('Error evaluating lending decision:', error);
-    res.status(500).json({
-      error: 'Failed to evaluate lending decision',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ error: 'Failed to evaluate lending decision', details: error.message });
+  }
+});
+
+// POST /lending-decision/:userId/recalculate
+router.post('/lending-decision/:userId/recalculate', auth, async (req, res) => {
+  const { userId } = req.params;
+  const updates = req.body || {};
+  try {
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: 'Invalid user ID format' });
+    }
+    if (req.user.role !== 'admin' && req.user.id !== userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    const user = await User.findById(userId).lean();
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    let creditReport = await CreditReport.findOne({ userId });
+    if (!creditReport) {
+      creditReport = await CreditReport.findOne({ userId: new mongoose.Types.ObjectId(userId) });
+    }
+    if (!creditReport) {
+      return res.status(404).json({ error: 'Credit report not found', details: 'No credit report exists for this user' });
+    }
+    // Build userData from template fields, merge updates
+    const userData = {
+      email: user.email,
+      paymentHistory: user.paymentHistory ?? 1,
+      creditUtilization: user.creditUtilization ?? creditReport.creditUtilization ?? 0,
+      creditAge: user.creditAge ?? creditReport.creditAge ?? 0,
+      creditMix: user.creditMix ?? 0,
+      inquiries: user.inquiries ?? 0,
+      totalDebt: user.totalDebt ?? creditReport.totalDebt ?? 0,
+      recentMissedPayments: user.recentMissedPayments ?? 0,
+      recentDefaults: user.recentDefaults ?? 0,
+      lastActiveDate: user.lastActiveDate ?? null,
+      activeLoanCount: user.activeLoanCount ?? 0,
+      oldestAccountAge: user.oldestAccountAge ?? 0,
+      transactionsLast90Days: user.transactionsLast90Days ?? 0,
+      onTimePaymentRate: user.onTimePaymentRate ?? 1,
+      recentLoanApplications: user.recentLoanApplications ?? 0,
+      defaultCountLast3Years: user.defaultCountLast3Years ?? 0,
+      consecutiveMissedPayments: user.consecutiveMissedPayments ?? 0,
+      monthlyIncome: user.monthlyIncome ?? 5000,
+      debtToIncome: user.debtToIncome ?? creditReport.debtToIncome ?? 0,
+      loanPurpose: user.loanPurpose ?? 'personal',
+      isExistingCustomer: user.isExistingCustomer ?? true,
+      engineVersion: user.engineVersion ?? 'v200',
+      economicIndicator: user.economicIndicator ?? 'stable',
+      primeRate: user.primeRate ?? 3.5,
+      ...updates // merge in any updated fields from the request
+    };
+    // Build scoreData
+    const scoreData = {
+      score: creditReport.creditScore?.fico?.score ?? 0,
+      classification: creditReport.creditScore?.classification ?? 'Unknown',
+      engineVersion: userData.engineVersion,
+      economicIndicator: userData.economicIndicator,
+      primeRate: userData.primeRate
+    };
+    let offer;
+    try {
+      const calculator = new LoanCalculator(scoreData, userData);
+      offer = calculator.run();
+    } catch (calcError) {
+      return res.status(200).json({ success: false, userId, error: 'Failed to evaluate lending decision', details: calcError.message });
+    }
+    res.json({ success: true, userId, offer, evaluatedAt: new Date() });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to evaluate lending decision', details: error.message });
   }
 });
 
@@ -513,362 +579,10 @@ router.get('/quick-report/:userId', auth, async (req, res) => {
   }
 });
 
-// Get lending decision for a specific user
-// Log all incoming requests for debugging
-router.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
-  console.log('Request Headers:', req.headers);
-  console.log('Request Body:', req.body);
-  next();
-});
-
-// Test endpoint to verify route registration
-router.get('/test', (req, res) => {
-  res.json({ message: 'Lender routes are working!' });
-});
-
-// Debug endpoint to list all available routes
-router.get('/debug/routes', (req, res) => {
-  const routes = [
-    { method: 'GET', path: '/api/v1/lender/test' },
-    { method: 'GET', path: '/api/v1/lender/debug/routes' },
-    { method: 'GET', path: '/api/v1/lender/credit-report/:userId' },
-    { method: 'POST', path: '/api/v1/lender/decision/:userId' },
-    // Add other routes as needed
-  ];
-  res.json({ routes });
-});
-
-router.post('/decision/:userId', auth, async (req, res) => {
-  console.log('Decision endpoint hit with params:', req.params);
-  console.log('Request user:', req.user);
-  console.log('Request body:', req.body);
-  
-  const { userId } = req.params;
-  
-  if (!mongoose.Types.ObjectId.isValid(userId)) {
-    console.error('Invalid user ID format:', userId);
-    return res.status(400).json({ 
-      error: 'Invalid user ID format',
-      details: 'The provided user ID is not a valid MongoDB ObjectId'
-    });
-  }
-  
-  console.log('Lending decision request received for user:', userId);
-  
-  try {
-    // Authorization check
-    if (req.user.role !== 'admin' && req.user.id !== userId) {
-      console.log('Unauthorized access attempt:', { 
-        userId, 
-        requesterId: req.user.id, 
-        requesterRole: req.user.role 
-      });
-      return res.status(403).json({ 
-        error: 'Not authorized to access this resource',
-        details: 'You do not have permission to access this user\'s data'
-      });
-    }
-
-    // Validate user ID format
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      console.error('Invalid user ID format:', userId);
-      return res.status(400).json({
-        error: 'Invalid user ID format',
-        details: 'The provided user ID is not a valid MongoDB ObjectId',
-        receivedValue: userId
-      });
-    }
-
-    const userIdObj = new mongoose.Types.ObjectId(userId);
-    
-    // Check user existence
-    console.log('Checking user existence:', userIdObj);
-    const user = await User.findById(userIdObj).lean();
-    if (!user) {
-      console.error('User not found:', userIdObj);
-      return res.status(404).json({ 
-        error: 'User not found',
-        details: `No user found with ID: ${userId}`,
-        solution: 'Please check the user ID and try again'
-      });
-    }
-    
-    console.log('User found, checking for credit report...');
-    
-    // Get latest credit report with fallback
-    let creditReport;
-    try {
-      console.log('=== DEBUGGING CREDIT REPORT QUERY ===');
-      
-      // Log the user ID in different formats
-      console.log('User ID details:', {
-        userId: userIdObj,
-        userIdType: typeof userIdObj,
-        userIdString: userIdObj.toString(),
-        userIdHexString: userIdObj.toString('hex'),
-        userIdToHexString: userIdObj.toHexString()
-      });
-      
-      // Try different query formats
-      const queries = [
-        { name: 'Direct ObjectId', query: { userId: userIdObj } },
-        { name: 'String ID', query: { userId: userIdObj.toString() } },
-        { name: 'Hex String', query: { userId: userIdObj.toHexString() } },
-        { name: 'Nested _id', query: { 'userId._id': userIdObj } },
-        { name: 'Nested _id String', query: { 'userId._id': userIdObj.toString() } }
-      ];
-      
-      // Try each query and log results
-      for (const {name, query} of queries) {
-        console.log(`\n=== Trying query: ${name} ===`);
-        console.log('Query:', JSON.stringify(query, null, 2));
-        
-        try {
-          const count = await CreditReport.countDocuments(query);
-          console.log(`Found ${count} credit reports`);
-          
-          if (count > 0) {
-            const sample = await CreditReport.findOne(query).lean();
-            console.log('Sample document:', {
-              _id: sample._id,
-              userId: sample.userId,
-              userIdType: typeof sample.userId,
-              hasCreditScore: !!sample.creditScore,
-              createdAt: sample.createdAt
-            });
-          }
-        } catch (queryError) {
-          console.error(`Error with query ${name}:`, queryError.message);
-        }
-      }
-      
-      // Also try a raw MongoDB query to see all credit reports
-      console.log('\n=== All credit reports in collection ===');
-      try {
-        const allReports = await CreditReport.find({}).limit(5).lean();
-        console.log(`Total credit reports in collection: ${allReports.length}`);
-        
-        allReports.forEach((report, index) => {
-          console.log(`\nReport ${index + 1}:`);
-          console.log(JSON.stringify({
-            _id: report._id?.toString(),
-            _idType: typeof report._id,
-            userId: report.userId?.toString(),
-            userIdType: typeof report.userId,
-            userIdConstructor: report.userId?.constructor?.name,
-            hasCreditScore: !!report.creditScore,
-            creditScore: report.creditScore?.fico?.score,
-            createdAt: report.createdAt,
-            // Include any other relevant fields that might help with debugging
-            ...(report.userId && { userIdLength: report.userId.toString().length }),
-            ...(report.userId && { userIdValue: report.userId.toString() })
-          }, null, 2));
-        });
-        
-        // Try to find any report with a similar user ID structure
-        if (allReports.length > 0) {
-          const sampleReport = allReports[0];
-          console.log('\n=== Sample Report Structure ===');
-          console.log(Object.keys(sampleReport));
-          console.log('userId in report:', sampleReport.userId);
-          console.log('userId type:', typeof sampleReport.userId);
-          console.log('userId constructor:', sampleReport.userId?.constructor?.name);
-          console.log('userId toString:', sampleReport.userId?.toString());
-          console.log('userId toHexString:', sampleReport.userId?.toHexString?.());
-        }
-      } catch (error) {
-        console.error('Error fetching all reports:', error);
-      }
-      
-      // Try to find any credit report with the user ID in any field
-      console.log('\n=== Searching for user ID in any field ===');
-      try {
-        const userIdString = userIdObj.toString();
-        const userIdHexString = userIdObj.toHexString();
-        
-        console.log('Searching with:', {
-          userIdObj: userIdObj.toString(),
-          userIdString,
-          userIdHexString
-        });
-        
-        // Try different query formats
-        const queries = [
-          { name: 'Direct ObjectId', query: { userId: userIdObj } },
-          { name: 'String ID', query: { userId: userIdString } },
-          { name: 'Hex String', query: { userId: userIdHexString } },
-          { name: 'Nested _id', query: { 'userId._id': userIdObj } },
-          { name: 'Nested _id String', query: { 'userId._id': userIdString } },
-          { name: 'Raw find with manual check', query: {} }
-        ];
-        
-        for (const {name, query} of queries) {
-          try {
-            console.log(`\nTrying query: ${name}`);
-            
-            if (name === 'Raw find with manual check') {
-              // Get all reports and manually check
-              const allReports = await CreditReport.find({}).lean();
-              console.log(`Checking ${allReports.length} reports manually`);
-              
-              for (const report of allReports) {
-                const reportUserId = report.userId?.toString();
-                if (reportUserId === userIdString || reportUserId === userIdHexString) {
-                  console.log('Found matching report with manual check:', {
-                    _id: report._id,
-                    reportUserId,
-                    searchId: userIdString
-                  });
-                  creditReport = report;
-                  break;
-                }
-              }
-            } else {
-              const result = await CreditReport.findOne(query).lean();
-              if (result) {
-                console.log(`Match found with ${name}:`, {
-                  _id: result._id,
-                  userId: result.userId,
-                  userIdType: typeof result.userId,
-                  queryUsed: query
-                });
-                creditReport = result;
-                break;
-              }
-            }
-          } catch (queryError) {
-            console.error(`Error with query ${name}:`, queryError.message);
-          }
-        }
-        
-        if (!creditReport) {
-          console.log('No credit reports found with any matching criteria');
-        }
-      } catch (broadError) {
-        console.error('Error in broad search:', broadError);
-      }
-    } catch (reportError) {
-      console.error('Error fetching credit report:', {
-        error: reportError.message,
-        stack: reportError.stack,
-        userId: userIdObj
-      });
-      return res.status(500).json({
-        error: 'Error fetching credit report',
-        details: 'An error occurred while retrieving the credit report',
-        ...(process.env.NODE_ENV === 'development' && { 
-          errorDetails: reportError.message 
-        })
-      });
-    }
-
-    if (!creditReport) {
-      console.error('No credit report found for user:', userIdObj);
-      return res.status(404).json({ 
-        error: 'Credit report not found',
-        details: `No credit report exists for user ${userId}`,
-        solution: 'Please generate a credit report first',
-        debug: {
-          userId: userId,
-          userIdType: typeof userId,
-          userIdIsValid: mongoose.Types.ObjectId.isValid(userId),
-          userExists: true
-        }
-      });
-    }
-    
-    console.log('Credit report found, extracting credit score...');
-    
-    // Extract credit score from the credit report
-    const creditScore = creditReport.creditScore?.fico?.score;
-    
-    if (typeof creditScore !== 'number' || creditScore < 300 || creditScore > 850) {
-      console.error('Invalid credit score in report:', {
-        score: creditScore,
-        userId: userIdObj,
-        reportId: creditReport._id
-      });
-      return res.status(400).json({
-        error: 'Invalid credit score data',
-        details: 'The credit report contains an invalid credit score',
-        solution: 'Please regenerate the credit report',
-        debug: {
-          userId: userId,
-          creditScore: creditScore,
-          creditScoreType: typeof creditScore,
-          creditReportId: creditReport._id
-        }
-      });
-    }
-
-    // Prepare decision data
-    const decisionData = {
-      ...user,
-      ...creditReport,
-      currentScore: creditScore,  // creditScore is already the score number
-      scoreData: creditReport.creditScore  // Include full score data
-    };
-
-    // Generate decision
-    console.log('Generating lending decision with data:', {
-      userId: user._id,
-      hasCreditScore: !!creditReport.creditScore,
-      decisionDataKeys: Object.keys(decisionData)
-    });
-    
-    try {
-      const decision = evaluateLendingDecision(decisionData);
-      
-      // Add metadata to response
-      decision.timestamp = new Date().toISOString();
-      decision.userId = userId;
-      decision.userEmail = user.email;
-      decision.creditReportId = creditReport._id;
-
-      console.log('Generated lending decision:', {
-        decision,
-        creditScore: creditReport.creditScore?.fico?.score,
-        hasCreditScore: !!creditReport.creditScore
-      });
-
-      res.json(decision);
-    } catch (decisionError) {
-      console.error('Error in evaluateLendingDecision:', {
-        error: decisionError.message,
-        stack: decisionError.stack,
-        decisionData: {
-          userId: user._id,
-          creditScore: creditReport.creditScore?.fico?.score,
-          hasCreditScore: !!creditReport.creditScore
-        }
-      });
-      
-      throw new Error(`Failed to generate lending decision: ${decisionError.message}`);
-    }
-  } catch (error) {
-    console.error('Error generating lending decision:', error);
-    
-    // Handle specific error types
-    if (error.name === 'CastError') {
-      return res.status(400).json({
-        error: 'Invalid ID format',
-        details: 'One of the provided IDs is not valid'
-      });
-    }
-
-    res.status(500).json({ 
-      error: 'Error generating lending decision',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-});
-
 // Get recent lending decisions
 router.get('/recent-decisions', auth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
-    
     // Get recent credit reports with user data
     const recentDecisions = await CreditReport.aggregate([
       {
@@ -893,11 +607,54 @@ router.get('/recent-decisions', auth, async (req, res) => {
       { $limit: limit }
     ]);
 
+    // Add lendingDecision to each decision using LoanCalculator
+    const { LoanCalculator } = await import('../utils/LoanCalculator.js');
+    const enhancedDecisions = await Promise.all(recentDecisions.map(async (report) => {
+      try {
+        const scoreInput = {
+          paymentHistory: report.paymentHistory ?? 0,
+          creditUtilization: report.creditUtilization ?? 1,
+          creditAge: report.creditAge ?? 0,
+          creditMix: report.creditMix ?? 0,
+          inquiries: report.inquiries ?? 1,
+          activeLoanCount: report.openAccounts ?? 0,
+        };
+        const scoreData = {
+          score: report.creditScore?.fico?.score ?? 0,
+          classification: report.creditScore?.classification ?? 'Unknown',
+          version: 'v101',
+        };
+        const userData = {
+          ...scoreInput,
+          onTimePaymentRate: report.onTimePaymentRate ?? 1,
+          onTimeRateLast6Months: report.onTimeRateLast6Months ?? 1,
+          loanTypeCounts: report.loanTypeCounts ?? {},
+          missedPaymentsLast12: report.missedPaymentsLast12 ?? 0,
+          recentLoanApplications: report.recentLoanApplications ?? 0,
+          defaultCountLast3Years: report.defaultCountLast3Years ?? 0,
+          consecutiveMissedPayments: report.consecutiveMissedPayments ?? 0,
+          recentDefaults: report.recentDefaults ?? 0,
+          monthsSinceLastDelinquency: report.monthsSinceLastDelinquency ?? 999,
+          activeLoanCount: report.openAccounts ?? 0,
+          monthlyIncome: report.monthlyIncome ?? 0,
+          totalDebt: report.totalDebt ?? 0,
+        };
+        const calculator = new LoanCalculator(scoreData, userData);
+        const lendingDecision = calculator.run();
+        lendingDecision.decision = lendingDecision.approved === true
+          ? 'Approve'
+          : (lendingDecision.approved === false ? 'Reject' : 'Review');
+        return { ...report, lendingDecision };
+      } catch (err) {
+        return { ...report, lendingDecision: { error: 'Failed to generate lending decision', details: err.message } };
+      }
+    }));
+
     res.json({
       status: 'success',
-      results: recentDecisions.length,
+      results: enhancedDecisions.length,
       data: {
-        decisions: recentDecisions
+        decisions: enhancedDecisions
       }
     });
   } catch (error) {
@@ -907,6 +664,171 @@ router.get('/recent-decisions', auth, async (req, res) => {
       message: 'Failed to fetch recent decisions',
       error: error.message
     });
+  }
+});
+
+// Save manual lending decision
+router.post('/save-decision/:userId', auth, async (req, res) => {
+  const { userId } = req.params;
+  const { decision, notes, loanDetails, isManual } = req.body;
+  
+  try {
+    // Validate user ID format
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ 
+        error: 'Invalid user ID format',
+        details: 'The provided user ID is not a valid MongoDB ObjectId'
+      });
+    }
+
+    // Authorization check - only admins and lenders can save decisions
+    if (req.user.role !== 'admin' && req.user.role !== 'lender') {
+      return res.status(403).json({ 
+        error: 'Not authorized',
+        details: 'Only admins and lenders can save lending decisions'
+      });
+    }
+
+    // Get user data
+    const user = await User.findById(userId).lean();
+    if (!user) {
+      return res.status(404).json({ 
+        error: 'User not found',
+        details: `No user found with ID: ${userId}`
+      });
+    }
+
+    // Get existing credit report
+    let creditReport = await CreditReport.findOne({ userId });
+    
+    if (!creditReport) {
+      // Create a new credit report with valid default values
+      creditReport = new CreditReport({
+        userId,
+        creditScore: { 
+          fico: { 
+            score: 650, // Default valid score
+            version: 'FICO 8',
+            lastUpdated: new Date(),
+            range: { min: 300, max: 850 }
+          }
+        },
+        totalDebt: 0,
+        monthlyIncome: 0,
+        recentMissedPayments: 0,
+        recentDefaults: 0,
+        lastUpdated: new Date()
+      });
+    }
+
+    // Update the lending decision
+    const newDecision = {
+      decision: decision,
+      reasons: req.body.reasons || [],
+      recommendations: req.body.recommendations || [],
+      isManual: isManual || false,
+      manualNotes: notes || '',
+      loanDetails: loanDetails || {},
+      evaluatedAt: new Date(),
+      evaluatedBy: req.user.id,
+      maxLoanAmount: req.body.maxLoanAmount || 0,
+      suggestedInterestRate: req.body.suggestedInterestRate || 0,
+      debtToIncomeRatio: req.body.debtToIncomeRatio || 0
+    };
+    creditReport.lendingDecision = newDecision;
+    // Push to history
+    creditReport.lendingDecisionHistory = creditReport.lendingDecisionHistory || [];
+    creditReport.lendingDecisionHistory.push(newDecision);
+    await creditReport.save();
+
+    res.json({
+      success: true,
+      message: 'Lending decision saved successfully',
+      data: {
+        userId,
+        decision: creditReport.lendingDecision,
+        savedAt: new Date()
+      }
+    });
+
+  } catch (error) {
+    console.error('Error saving lending decision:', error);
+    res.status(500).json({
+      error: 'Failed to save lending decision',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// Helper to escape regex special characters
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Search borrowers by name, email, or phone (for lenders)
+router.get('/search-borrowers', auth, async (req, res) => {
+  try {
+    if (!['lender', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Access denied', details: 'Only lenders and admins can search borrowers' });
+    }
+    const { search = '' } = req.query;
+    if (!search.trim() || search.trim().length < 2) {
+      return res.json({ success: true, data: [] });
+    }
+    const safeSearch = escapeRegex(search);
+    // Find users with a credit report and matching search
+    const borrowers = await User.aggregate([
+      {
+        $lookup: {
+          from: 'creditreports',
+          let: { userId: '$_id', phoneNumber: '$phoneNumber' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ['$userId', '$$userId'] },
+                    { $eq: ['$userId', '$$phoneNumber'] }
+                  ]
+                }
+              }
+            }
+          ],
+          as: 'creditReport'
+        }
+      },
+      { $match: { 'creditReport.0': { $exists: true } } },
+      {
+        $match: {
+          $or: [
+            { name: { $regex: safeSearch, $options: 'i' } },
+            { email: { $regex: safeSearch, $options: 'i' } },
+            { username: { $regex: safeSearch, $options: 'i' } },
+            { phoneNumber: { $regex: safeSearch, $options: 'i' } },
+            { 'profile.phone': { $regex: safeSearch, $options: 'i' } }
+          ]
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          name: 1,
+          email: 1,
+          role: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          creditReportId: { $arrayElemAt: ['$creditReport._id', 0] },
+          creditScore: { $ifNull: [{ $arrayElemAt: ['$creditReport.creditScore.fico.score', 0] }, null] },
+          reportUpdatedAt: { $arrayElemAt: ['$creditReport.updatedAt', 0] }
+        }
+      },
+      { $sort: { name: 1 } },
+      { $limit: 50 }
+    ]);
+    res.json({ success: true, data: borrowers });
+  } catch (error) {
+    console.error('Error searching borrowers:', error);
+    res.status(500).json({ error: 'Failed to search borrowers', details: error.message });
   }
 });
 

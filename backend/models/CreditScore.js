@@ -42,8 +42,7 @@ const creditScoreSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'Score is required'],
     min: [300, 'Score must be at least 300'],
-    max: [850, 'Score cannot exceed 850'],
-    index: true
+    max: [850, 'Score cannot exceed 850']
   },
   classification: {
     type: String,
@@ -177,7 +176,6 @@ creditScoreSchema.statics.getAverageScore = async function(userId) {
       const User = mongoose.model('User');
       
       await User.findByIdAndUpdate(userId, {
-        creditScore: Math.round(averageScore),
         creditScoreHighest: highestScore,
         creditScoreLowest: lowestScore,
         creditScoreUpdates: count

@@ -3,6 +3,7 @@ import { auth } from '../middleware/auth.js';
 import User from '../models/User.js';
 import CreditReport from '../models/CreditReport.js';
 import { evaluateLendingDecision } from '../utils/lendingDecision.js';
+import { calculateCreditScore } from '../utils/creditScoring.js';
 
 const router = express.Router();
 
@@ -12,6 +13,9 @@ const router = express.Router();
  * @access  Private
  */
 router.get('/:identifier/credit-data', auth, async (req, res) => {
+  // DEBUG: Confirm route is being executed
+  console.log('DEBUG: /api/users/:identifier/credit-data route HIT', { params: req.params, user: req.user });
+
   try {
     console.log('Fetching user data for identifier:', req.params.identifier);
     console.log('Authenticated user ID:', req.user?.id);
@@ -170,6 +174,43 @@ router.get('/:identifier/credit-data', auth, async (req, res) => {
       
       console.log('Found credit score history:', creditScores.length, 'entries');
       
+      // If no lending decision, generate and save one
+      if (!creditReport.lendingDecision || !creditReport.lendingDecision.decision) {
+        // Prepare scoreData and userData for evaluateLendingDecision
+        const scoreData = {
+          score: creditReport.creditScore?.fico?.score ?? 0,
+          classification: creditReport.creditScore?.classification ?? 'Unknown',
+          version: 'v101',
+        };
+        const userData = {
+          paymentHistory: creditReport.paymentHistory ?? 0,
+          creditUtilization: creditReport.creditUtilization ?? 1,
+          creditAge: creditReport.creditAge ?? 0,
+          creditMix: creditReport.creditMix ?? 0,
+          inquiries: creditReport.inquiries ?? 1,
+          activeLoanCount: creditReport.openAccounts ?? 0,
+          onTimePaymentRate: creditReport.onTimePaymentRate ?? 1,
+          onTimeRateLast6Months: creditReport.onTimeRateLast6Months ?? 1,
+          loanTypeCounts: creditReport.loanTypeCounts ?? {},
+          missedPaymentsLast12: creditReport.missedPaymentsLast12 ?? 0,
+          recentLoanApplications: creditReport.recentLoanApplications ?? 0,
+          defaultCountLast3Years: creditReport.defaultCountLast3Years ?? 0,
+          consecutiveMissedPayments: creditReport.consecutiveMissedPayments ?? 0,
+          recentDefaults: creditReport.recentDefaults ?? 0,
+          monthsSinceLastDelinquency: creditReport.monthsSinceLastDelinquency ?? 999,
+          monthlyIncome: creditReport.monthlyIncome ?? 0,
+          totalDebt: creditReport.totalDebt ?? 0,
+        };
+        const decision = evaluateLendingDecision(scoreData, userData);
+        creditReport.lendingDecision = decision;
+        creditReport.lendingDecisionHistory = creditReport.lendingDecisionHistory || [];
+        creditReport.lendingDecisionHistory.push(decision);
+        await CreditReport.updateOne({ _id: creditReport._id }, {
+          $set: { lendingDecision: decision },
+          $push: { lendingDecisionHistory: decision }
+        });
+      }
+      
       // Prepare base response data
       const responseData = {
         success: true,
@@ -191,49 +232,36 @@ router.get('/:identifier/credit-data', auth, async (req, res) => {
             lastUpdated: creditReport.lastUpdated || new Date().toISOString(),
             hasFicoScore: !!creditReport.creditScore?.fico,
             ficoScore: creditReport.creditScore?.fico?.score || null
-          }
+          },
+          // Add all relevant fields for the Borrower Snapshot UI
+          monthlyIncome: creditReport.monthlyIncome ?? null,
+          totalDebt: creditReport.totalDebt ?? null,
+          recentMissedPayments: creditReport.recentMissedPayments ?? null,
+          recentDefaults: creditReport.recentDefaults ?? null,
+          creditUtilization: creditReport.creditUtilization ?? null,
+          creditMix: creditReport.creditMix ?? null,
+          creditAgeMonths: creditReport.creditAgeMonths ?? null,
+          totalAccounts: creditReport.totalAccounts ?? null,
+          openAccounts: creditReport.openAccounts ?? null,
+          // --- Lending Decision fields for LenderDashboard ---
+          lendingDecision: creditReport.lendingDecision || null,
+          lendingDecisionHistory: creditReport.lendingDecisionHistory || []
         }
       };
       
-      // Log the complete response data for debugging
-      console.log('Sending credit data response:', JSON.stringify({
-        responseData: {
-          ...responseData,
-          data: {
-            ...responseData.data,
-            // Truncate large arrays for logging
-            creditScores: responseData.data.creditScores?.length || 0,
-            factors: responseData.data.factors?.length || 0
-          }
-        },
-        timestamp: new Date().toISOString()
-      }, null, 2));
-
-      // Add lending decision if we have the required data
-      try {
-        const lendingData = {
-          ...creditReport.creditScore.fico,
-          totalDebt: creditReport.totalDebt || 0,
-          monthlyIncome: creditReport.monthlyIncome || 0,
-          recentMissedPayments: creditReport.recentMissedPayments || 0,
-          recentDefaults: creditReport.recentDefaults || 0
-        };
-        
-        const lendingDecision = evaluateLendingDecision(lendingData);
-        responseData.data.lendingDecision = {
-          decision: lendingDecision.decision,
-          reasons: lendingDecision.reasons,
-          recommendations: lendingDecision.recommendations
-        };
-      } catch (lendingError) {
-        console.error('Error calculating lending decision:', lendingError);
-        // Don't fail the request if lending decision fails
-        responseData.data.lendingDecision = {
-          error: 'Could not calculate lending decision',
-          details: process.env.NODE_ENV === 'development' ? lendingError.message : undefined
-        };
-      }
+      // --- Add calculateCreditScore output for Score Breakdown ---
+      const scoreInput = {
+        paymentHistory: creditReport.paymentHistory ?? 0,
+        creditUtilization: creditReport.creditUtilization ?? 1,
+        creditAge: creditReport.creditAge ?? 0,
+        creditMix: creditReport.creditMix ?? 0,
+        inquiries: creditReport.inquiries ?? 1,
+        activeLoanCount: creditReport.openAccounts ?? 0,
+      };
+      responseData.data.scoreResult = calculateCreditScore(scoreInput);
       
+      // Log the complete response data for debugging
+      console.log('DEBUG: FINAL RESPONSE', JSON.stringify(responseData, null, 2));
       res.json(responseData);
       
     } catch (dbError) {
@@ -257,6 +285,82 @@ router.get('/:identifier/credit-data', auth, async (req, res) => {
       error: 'Server error',
       message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
       ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    });
+  }
+});
+
+/**
+ * @route   POST /api/users/:userId/refresh-credit-score
+ * @desc    Refresh user's credit score (Premium feature)
+ * @access  Private
+ */
+router.post('/:userId/refresh-credit-score', auth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    // Verify the requesting user is either an admin or the user themselves
+    const isAuthorized = req.user.role === 'admin' || req.user.id === userId;
+    
+    if (!isAuthorized) {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Not authorized to refresh this user\'s credit score'
+      });
+    }
+    
+    // Check if user is premium
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    if (!user.premium?.isPremium && req.user.role !== 'admin') {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Premium feature - upgrade required'
+      });
+    }
+    
+    // Get the latest credit report
+    const latestReport = await CreditReport.findOne({ userId })
+      .sort({ 'creditScore.fico.lastUpdated': -1, lastUpdated: -1 });
+    
+    if (!latestReport) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'No credit report found for user'
+      });
+    }
+    
+    // Simulate a refresh by updating the lastUpdated timestamp
+    // In a real implementation, this would call external credit bureaus
+    const updatedReport = await CreditReport.findByIdAndUpdate(
+      latestReport._id,
+      { 
+        lastUpdated: new Date(),
+        'creditScore.fico.lastUpdated': new Date()
+      },
+      { new: true }
+    );
+    
+    res.json({
+      success: true,
+      data: {
+        message: 'Credit score refreshed successfully',
+        lastUpdated: updatedReport.lastUpdated,
+        score: updatedReport.creditScore?.fico?.score
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error refreshing credit score:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to refresh credit score',
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 });

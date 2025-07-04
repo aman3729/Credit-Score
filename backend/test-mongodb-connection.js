@@ -1,7 +1,17 @@
 import { MongoClient } from 'mongodb';
 
-const uri = 'mongodb+srv://aman:vpd6dbDAq3EigvwQ@credit-score-dashboard.w2bwj1o.mongodb.net/credit-score-db?retryWrites=true&w=majority';
-const client = new MongoClient(uri, { useNewUrlParser: true, useUnifiedTopology: true });
+const uri = process.env.MONGODB_URI;
+
+if (!uri) {
+  console.error('❌ MONGODB_URI is not defined in environment variables');
+  process.exit(1);
+}
+
+const client = new MongoClient(uri, { 
+  serverSelectionTimeoutMS: 10000,
+  socketTimeoutMS: 30000,
+  connectTimeoutMS: 10000,
+});
 
 async function run() {
   try {

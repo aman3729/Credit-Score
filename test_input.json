@@ -1,0 +1,27 @@
+[
+  {
+    "phone number": "+251954880513",
+    "paymentHistory": 0.85,
+    "creditUtilization": 0.55,
+    "creditAge": 0.4,
+    "creditMix": 0.5,
+    "inquiries": 4,
+    "lastActiveDate": "2023-11-15",
+    "activeLoanCount": 2,
+    "oldestAccountAge": 24,
+    "transactionsLast90Days": 5,
+    "onTimePaymentRate": 0.88,
+    "recentLoanApplications": 2,
+    "defaultCountLast3Years": 1,
+    "consecutiveMissedPayments": 2,
+    "loanTypeCounts": { "creditCard": 1, "personalLoan": 1 },
+    "missedPaymentsLast12": 1,
+    "onTimeRateLast6Months": 0.9,
+    "monthsSinceLastDelinquency": 6,
+    "totalDebt": 8000,
+    "monthlyIncome": 3200,
+    "employmentStatus": "self-employed",
+    "collateralValue": 0,
+    "notes": "Second user, some risk factors"
+  }
+]

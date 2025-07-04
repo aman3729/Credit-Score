@@ -159,9 +159,44 @@ const saveCreditScore = catchAsync(async (req, res, next) => {
     }
   });
   
+  // Automatically create or update CreditReport for this user
+  const creditReportUpdate = {
+    userId: req.user.id,
+    creditScore: { fico: { score } },
+    creditAge: factors?.creditAge ?? req.body.creditAge ?? req.user.creditAge ?? 0,
+    creditUtilization: factors?.creditUtilization ?? req.body.creditUtilization ?? req.user.creditUtilization ?? 0,
+    totalDebt: factors?.totalDebt ?? req.body.totalDebt ?? req.user.totalDebt ?? 0,
+    paymentHistory: factors?.paymentHistory ?? req.body.paymentHistory ?? req.user.paymentHistory ?? 0,
+    creditMix: factors?.creditMix ?? req.body.creditMix ?? req.user.creditMix ?? 0,
+    inquiries: factors?.inquiries ?? req.body.inquiries ?? req.user.inquiries ?? 0,
+    updatedAt: new Date(),
+    lendingDecision: {
+      decision: lendingDecision.decision,
+      reasons: lendingDecision.reasons,
+      recommendations: lendingDecision.recommendations,
+      evaluatedAt: new Date()
+    }
+  };
+  const creditReport = await CreditReport.findOneAndUpdate(
+    { userId: req.user.id },
+    {
+      $set: creditReportUpdate,
+      $push: {
+        lendingDecisionHistory: {
+          decision: lendingDecision.decision,
+          reasons: lendingDecision.reasons,
+          recommendations: lendingDecision.recommendations,
+          evaluatedAt: new Date()
+        }
+      }
+    },
+    { upsert: true, new: true }
+  );
+  logger.info('CreditReport updated or created', { userId: req.user.id, creditReport });
+  
   // Update user's current score if this is higher than their current score
   if (!req.user.creditScore || score > req.user.creditScore) {
-    req.user.creditScore = score;
+    req.user.creditScore = creditScore._id;
     await req.user.save({ validateBeforeSave: false });
     
     // If there was a previous score and it's different, send update email
@@ -330,13 +365,58 @@ const getAllCreditReports = catchAsync(async (req, res, next) => {
   // 2) Build the base query
   const query = {};
   
+  // Add search filter if provided
+  if (req.query.search) {
+    // Search by user email or name
+    const userIds = await User.find({
+      $or: [
+        { email: { $regex: req.query.search, $options: 'i' } },
+        { firstName: { $regex: req.query.search, $options: 'i' } },
+        { lastName: { $regex: req.query.search, $options: 'i' } }
+      ]
+    }).select('_id');
+    
+    if (userIds.length > 0) {
+      query.userId = { $in: userIds.map(u => u._id) };
+    } else {
+      // If no users found, return empty result
+      query.userId = { $in: [] };
+    }
+  }
+  
   // 3) Add filters if provided
   if (req.query.status) {
     query.status = req.query.status;
   }
   
+  // Handle score filter
+  if (req.query.filter) {
+    switch (req.query.filter) {
+      case 'excellent':
+        query['creditScore.fico.score'] = { $gte: 800 };
+        break;
+      case 'good':
+        query['creditScore.fico.score'] = { $gte: 700, $lt: 800 };
+        break;
+      case 'fair':
+        query['creditScore.fico.score'] = { $gte: 600, $lt: 700 };
+        break;
+      case 'poor':
+        query['creditScore.fico.score'] = { $lt: 600 };
+        break;
+      case 'flagged':
+        query.flagged = true;
+        break;
+      case 'all':
+      default:
+        // No additional filter
+        break;
+    }
+  }
+  
   if (req.query.minScore) {
-    query['creditScore.fico.score'] = { $gte: parseInt(req.query.minScore, 10) };
+    query['creditScore.fico.score'] = query['creditScore.fico.score'] || {};
+    query['creditScore.fico.score'].$gte = parseInt(req.query.minScore, 10);
   }
   
   if (req.query.maxScore) {
@@ -387,14 +467,12 @@ const getAllCreditReports = catchAsync(async (req, res, next) => {
   res.status(200).json({
     status: 'success',
     results: reports.length,
-    data: {
-      reports: reportsWithUserInfo
-    },
+    reports: reportsWithUserInfo,
     pagination: {
+      current: page,
+      totalPages: Math.ceil(total / limit),
       total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit)
+      limit
     }
   });
 });

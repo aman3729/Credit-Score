@@ -119,6 +119,7 @@ export const AuthProvider = ({ children }) => {
         variant: 'success',
       });
 
+      // Return the user for potential role-based navigation
       return authenticatedUser;
     } catch (error) {
       console.error('[Auth] Login error:', error);

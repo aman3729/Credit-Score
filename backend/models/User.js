@@ -14,19 +14,19 @@ const userSchema = new mongoose.Schema({
   },
   email: {
     type: String,
-    required: [true, 'Please provide your email'],
     unique: true,
     lowercase: true,
-    validate: [validator.isEmail, 'Please provide a valid email']
+    validate: [validator.isEmail, 'Please provide a valid email'],
+    required: false
   },
   username: {
     type: String,
-    required: [true, 'Please provide a username'],
     unique: true,
+    required: [true, 'Username is required'],
     trim: true,
     minlength: [3, 'Username must be at least 3 characters long'],
     maxlength: [30, 'Username cannot be more than 30 characters'],
-    match: [/^[a-zA-Z0-9_]+$/, 'Username can only contain alphanumeric characters and underscores']
+    match: [/^[a-zA-Z0-9_]+$/, 'Username can only contain alphanumeric characters and underscores'],
   },
   password: {
     type: String,
@@ -47,11 +47,13 @@ const userSchema = new mongoose.Schema({
   },
   nationalId: {
     type: String,
-    required: [true, 'National ID is required'],
+    required: false,
     unique: true,
+    sparse: true,
     trim: true,
     validate: {
       validator: function(v) {
+        if (!v) return true;
         return /^\d{16}$/.test(v);
       },
       message: props => `${props.value} is not a valid 16-digit national ID`
@@ -63,12 +65,22 @@ const userSchema = new mongoose.Schema({
     min: 0,
     default: 0
   },
+  monthlySavings: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
   totalDebt: {
     type: Number,
     min: 0,
     default: 0
   },
-  totalCredit: {
+  bankBalance: {
+    type: Number,
+    min: 0,
+    default: 0
+  },
+  mobileMoneyBalance: {
     type: Number,
     min: 0,
     default: 0
@@ -106,8 +118,8 @@ const userSchema = new mongoose.Schema({
   lastLogin: Date,
   status: {
     type: String,
-    enum: ['active', 'suspended', 'deactivated'],
-    default: 'active'
+    enum: ['active', 'suspended', 'deactivated', 'pending'],
+    default: 'pending'
   },
   profile: {
     phone: String,
@@ -119,11 +131,22 @@ const userSchema = new mongoose.Schema({
       country: String
     },
     dateOfBirth: Date,
-    ssnLast4: {
+    avatar: String,
+    // Enhanced registration fields
+    fullAddress: String,
+    gender: {
       type: String,
-      select: false
+      enum: ['male', 'female', 'other', 'prefer-not-to-say']
     },
-    avatar: String
+    employmentStatus: {
+      type: String,
+      enum: ['employed', 'self-employed', 'unemployed', 'student', 'retired']
+    },
+    employerName: String,
+    industry: {
+      type: String,
+      enum: ['technology', 'finance', 'healthcare', 'education', 'retail', 'manufacturing', 'agriculture', 'construction', 'transportation', 'other']
+    }
   },
   preferences: {
     notifications: {
@@ -141,6 +164,45 @@ const userSchema = new mongoose.Schema({
       default: 'en'
     }
   },
+  // Premium User Features
+  premium: {
+    isPremium: {
+      type: Boolean,
+      default: false
+    },
+    subscriptionType: {
+      type: String,
+      enum: ['monthly', 'yearly', 'lifetime'],
+      required: false
+    },
+    subscriptionStartDate: Date,
+    subscriptionEndDate: Date,
+    features: {
+      realTimeCreditRefresh: { type: Boolean, default: false },
+      fullCreditReport: { type: Boolean, default: false },
+      fraudAlerts: { type: Boolean, default: false },
+      creditMonitoring: { type: Boolean, default: false },
+      personalizedInsights: { type: Boolean, default: false },
+      lendingEligibilityReports: { type: Boolean, default: false },
+      customLoanOffers: { type: Boolean, default: false },
+      priorityDisputeHandling: { type: Boolean, default: false },
+      financialCoaching: { type: Boolean, default: false },
+      exportOptions: { type: Boolean, default: false },
+      multiSourceCreditMerge: { type: Boolean, default: false },
+      customNotifications: { type: Boolean, default: false },
+      prioritySupport: { type: Boolean, default: false },
+      auditLogs: { type: Boolean, default: false },
+      idVerificationReports: { type: Boolean, default: false },
+      complianceCertificates: { type: Boolean, default: false },
+      creditSimulator: { type: Boolean, default: false }
+    },
+    usage: {
+      creditRefreshesThisMonth: { type: Number, default: 0 },
+      reportsGenerated: { type: Number, default: 0 },
+      simulationsRun: { type: Number, default: 0 },
+      lastCreditRefresh: Date
+    }
+  },
   metadata: {
     signupSource: String,
     lastIpAddress: String,
@@ -148,9 +210,8 @@ const userSchema = new mongoose.Schema({
   },
   // Credit Score Fields
   creditScore: {
-    type: Number,
-    min: 300,
-    max: 850,
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CreditScore',
     default: null
   },
   creditScoreLastUpdated: {
@@ -170,7 +231,7 @@ const userSchema = new mongoose.Schema({
     },
     source: {
       type: String,
-      enum: ['manual', 'batch_upload', 'api', 'system'],
+      enum: ['manual', 'batch_upload', 'api', 'system', 'system-generated'],
       required: true
     },
     factors: {
@@ -180,7 +241,73 @@ const userSchema = new mongoose.Schema({
       creditMix: Number,
       inquiries: Number
     }
-  }]
+  }],
+  // Admin-only fields
+  adminFields: {
+    initialCreditScore: {
+      type: Number,
+      min: 300,
+      max: 850
+    },
+    sourceNotes: String,
+    adminNotes: String, // Admin notes for approval/rejection
+    branchVerification: {
+      type: Boolean,
+      default: false
+    },
+    verifiedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    verificationDate: Date
+  },
+  // Legal consent fields
+  legalConsent: {
+    termsAccepted: {
+      type: Boolean,
+      default: false
+    },
+    creditChecksAuthorized: {
+      type: Boolean,
+      default: false
+    },
+    consentDate: Date
+  },
+  phoneNumber: {
+    type: String,
+    required: [true, 'Please provide your phone number'],
+    unique: true,
+    trim: true,
+    validate: {
+      validator: function(v) {
+        return /^\+?\d{9,15}$/.test(v);
+      },
+      message: props => `${props.value} is not a valid phone number (must be 9-15 digits, can start with +)`
+    }
+  },
+  nextCreditReviewDate: {
+    type: Date,
+    default: () => {
+      const now = new Date();
+      now.setMonth(now.getMonth() + 1); // 30 days from now
+      return now;
+    }
+  },
+  scoreHistory: [{
+    date: { type: Date, default: Date.now },
+    score: Number,
+    classification: String,
+    decision: String,
+    reason: String,
+    triggeredBy: String
+  }],
+  adminOverride: {
+    score: Number,
+    reason: String,
+    appliedBy: { type: String, ref: 'User' },
+    timestamp: Date
+  },
+  riskFlags: [{ type: String }],
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -261,6 +388,51 @@ userSchema.methods.comparePassword = async function(enteredPassword) {
   }
 };
 
+// correctPassword method (used by auth controller)
+userSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
+  try {
+    console.log('=== PASSWORD COMPARISON DEBUG ===');
+    console.log('Entered password length:', candidatePassword?.length || 0);
+    console.log('Stored password hash exists:', !!userPassword);
+    console.log('Stored password hash length:', userPassword?.length || 0);
+    
+    if (!candidatePassword) {
+      console.error('No password provided for comparison');
+      return false;
+    }
+    
+    if (!userPassword) {
+      console.error('No hashed password found for user');
+      return false;
+    }
+    
+    // Ensure both passwords are strings
+    const candidatePasswordStr = String(candidatePassword);
+    const storedPasswordHash = String(userPassword);
+    
+    // Check if the stored password is already hashed
+    const isHash = /^\$2[aby]?\$\d{1,2}\$[./0-9A-Za-z]{53}$/.test(storedPasswordHash);
+    
+    if (!isHash) {
+      console.error('Stored password is not a valid bcrypt hash');
+      return false;
+    }
+    
+    const isMatch = await bcrypt.compare(candidatePasswordStr, storedPasswordHash);
+    console.log('Password comparison result:', isMatch);
+    return isMatch;
+  } catch (error) {
+    console.error('Error in correctPassword:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      code: error.code,
+      name: error.name
+    });
+    throw error;
+  }
+};
+
 // Generate reset password token
 userSchema.methods.getResetPasswordToken = function () {
   const resetToken = crypto.randomBytes(20).toString('hex');
@@ -297,6 +469,58 @@ userSchema.virtual('creditScores', {
 // Indexes
 userSchema.index({ name: 'text', email: 'text', 'profile.phone': 'text' });
 userSchema.index({ email: 1, role: 1 });
+
+// Premium User Methods
+userSchema.methods.isPremiumUser = function() {
+  return this.premium?.isPremium === true;
+};
+
+userSchema.methods.hasPremiumFeature = function(featureName) {
+  if (!this.isPremiumUser()) return false;
+  return this.premium?.features?.[featureName] === true;
+};
+
+userSchema.methods.canRefreshCredit = function() {
+  if (!this.isPremiumUser()) return false;
+  
+  // Basic users get monthly refresh, premium users get weekly
+  const lastRefresh = this.premium?.usage?.lastCreditRefresh;
+  if (!lastRefresh) return true;
+  
+  const now = new Date();
+  const daysSinceLastRefresh = (now - lastRefresh) / (1000 * 60 * 60 * 24);
+  
+  return daysSinceLastRefresh >= 7; // Weekly for premium users
+};
+
+userSchema.methods.getPremiumFeatures = function() {
+  if (!this.isPremiumUser()) return [];
+  
+  const features = [];
+  const premiumFeatures = this.premium?.features || {};
+  
+  Object.entries(premiumFeatures).forEach(([feature, enabled]) => {
+    if (enabled) {
+      features.push(feature);
+    }
+  });
+  
+  return features;
+};
+
+userSchema.methods.getSubscriptionStatus = function() {
+  if (!this.isPremiumUser()) return 'none';
+  
+  const now = new Date();
+  const endDate = this.premium?.subscriptionEndDate;
+  
+  if (!endDate) return 'active';
+  
+  if (now > endDate) return 'expired';
+  if (now > new Date(endDate.getTime() - 7 * 24 * 60 * 60 * 1000)) return 'expiring_soon';
+  
+  return 'active';
+};
 
 const User = mongoose.model('User', userSchema);
 export default User;

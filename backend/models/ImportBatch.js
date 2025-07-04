@@ -27,7 +27,7 @@ const importBatchSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  importErrors: [{
+  errorList: [{
     row: Number,
     message: String,
     field: String,
@@ -48,9 +48,8 @@ const importBatchSchema = new mongoose.Schema({
     transform: (doc, ret) => {
       ret.id = ret._id;
       delete ret._id;
-      if (ret.importErrors) {
-        ret.errors = ret.importErrors;
-        delete ret.importErrors;
+      if (ret.errorList) {
+        ret.errorList = ret.errorList;
       }
       delete ret.__v;
       return ret;

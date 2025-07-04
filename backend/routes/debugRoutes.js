@@ -2,6 +2,7 @@ import express from 'express';
 import User from '../models/User.js';
 import CreditReport from '../models/CreditReport.js';
 import logger from '../utils/logger.js';
+import bcrypt from 'bcryptjs';
 
 const router = express.Router();
 
@@ -148,6 +149,147 @@ router.get('/health', (req, res) => {
     nodeEnv: process.env.NODE_ENV,
     nodeVersion: process.version
   });
+});
+
+// Temporary endpoint to fix admin password
+router.post('/fix-admin-password', async (req, res) => {
+  try {
+    console.log('🔧 Fixing admin password...');
+    
+    // Find admin user
+    const adminUser = await User.findOne({ email: 'admin@example.com' }).select('+password');
+    
+    if (!adminUser) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Admin user not found' 
+      });
+    }
+    
+    console.log('✅ Found admin user:', adminUser.email);
+    console.log('Current role:', adminUser.role);
+    
+    // Test current password
+    const testPassword = 'Admin123!';
+    const currentMatch = await bcrypt.compare(testPassword, adminUser.password);
+    console.log('Current password test result:', currentMatch);
+    
+    if (!currentMatch) {
+      console.log('🔧 Creating new password hash...');
+      
+      // Create new password hash
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(testPassword, salt);
+      
+      // Update the password
+      adminUser.password = hashedPassword;
+      await adminUser.save();
+      
+      console.log('✅ Password updated');
+      
+      // Test the new password
+      const newMatch = await bcrypt.compare(testPassword, adminUser.password);
+      console.log('New password test result:', newMatch);
+      
+      if (newMatch) {
+        console.log('🎉 SUCCESS! Admin password fixed');
+        return res.json({
+          success: true,
+          message: 'Admin password fixed successfully',
+          email: 'admin@example.com',
+          password: 'Admin123!'
+        });
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: 'Password fix failed'
+        });
+      }
+    } else {
+      console.log('✅ Admin password is already correct');
+      return res.json({
+        success: true,
+        message: 'Admin password is already correct',
+        email: 'admin@example.com',
+        password: 'Admin123!'
+      });
+    }
+    
+  } catch (error) {
+    console.error('❌ Error fixing admin password:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fixing admin password',
+      error: error.message
+    });
+  }
+});
+
+// Temporary endpoint to verify admin email and fix admin user
+router.post('/fix-admin-user', async (req, res) => {
+  try {
+    console.log('🔧 Fixing admin user...');
+    
+    // Find admin user by email from .env
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@example.com';
+    const adminUser = await User.findOne({ email: adminEmail }).select('+password');
+    
+    if (!adminUser) {
+      return res.status(404).json({ 
+        success: false, 
+        message: `Admin user ${adminEmail} not found` 
+      });
+    }
+    
+    console.log('✅ Found admin user:', adminUser.email);
+    console.log('Current role:', adminUser.role);
+    console.log('Email verified:', adminUser.isEmailVerified);
+    
+    // Fix email verification
+    if (!adminUser.isEmailVerified) {
+      adminUser.isEmailVerified = true;
+      adminUser.emailVerified = true;
+      console.log('✅ Email verification fixed');
+    }
+    
+    // Fix password if needed
+    const testPassword = process.env.ADMIN_PASSWORD || 'Admin123!';
+    const currentMatch = await bcrypt.compare(testPassword, adminUser.password);
+    console.log('Current password test result:', currentMatch);
+    
+    if (!currentMatch) {
+      console.log('🔧 Creating new password hash...');
+      
+      // Create new password hash
+      const salt = await bcrypt.genSalt(10);
+      const hashedPassword = await bcrypt.hash(testPassword, salt);
+      
+      // Update the password
+      adminUser.password = hashedPassword;
+      console.log('✅ Password updated');
+    }
+    
+    // Save all changes
+    await adminUser.save();
+    
+    console.log('🎉 SUCCESS! Admin user fixed');
+    return res.json({
+      success: true,
+      message: 'Admin user fixed successfully',
+      email: adminUser.email,
+      password: testPassword,
+      role: adminUser.role,
+      emailVerified: adminUser.isEmailVerified
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fixing admin user:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fixing admin user',
+      error: error.message
+    });
+  }
 });
 
 export default router;

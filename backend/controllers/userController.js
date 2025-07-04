@@ -3,6 +3,7 @@ const AppError = require('../utils/appError');
 const catchAsync = require('../utils/catchAsync');
 const factory = require('./handlerFactory');
 const { logger, securityLogger } = require('../config/logger');
+const AuditLog = require('../models/AuditLog');
 
 // Helper function to filter out unwanted fields that are not allowed to be updated
 const filterObj = (obj, ...allowedFields) => {
@@ -185,6 +186,38 @@ const updateUserRole = catchAsync(async (req, res, next) => {
   });
 });
 
+// Admin override endpoint (example)
+const adminOverrideScore = async (req, res) => {
+  const { userId } = req.params;
+  const { score, reason, riskFlags } = req.body;
+  const adminId = req.user?._id || 'admin';
+  const user = await User.findById(userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const before = { adminOverride: user.adminOverride, riskFlags: user.riskFlags };
+  user.adminOverride = { score, reason, appliedBy: adminId, timestamp: new Date() };
+  if (riskFlags) user.riskFlags = Array.from(new Set([...(user.riskFlags || []), ...riskFlags]));
+  await user.save();
+  await AuditLog.create({
+    action: 'Score Overridden',
+    by: adminId,
+    userId: user._id,
+    before,
+    after: { adminOverride: user.adminOverride, riskFlags: user.riskFlags },
+    timestamp: new Date()
+  });
+  res.json({ success: true, user });
+};
+
+// Compliance check before scoring (example)
+const checkComplianceAndScore = async (req, res, next) => {
+  const user = await User.findById(req.params.userId);
+  if (!user.legalConsent?.creditChecksAuthorized) {
+    return res.status(400).json({ error: 'Cannot calculate score: no user consent' });
+  }
+  // ...proceed with scoring logic...
+  next();
+};
+
 module.exports = {
   getMe,
   updateMe,
@@ -197,4 +230,6 @@ module.exports = {
   getUserStats,
   getUserActivity,
   updateUserRole,
+  adminOverrideScore,
+  checkComplianceAndScore,
 };

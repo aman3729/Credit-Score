@@ -9,21 +9,29 @@ import ExcelJS from 'exceljs';
 import pMap from 'p-map';
 import { calculateCreditScore as calculateScore } from '../utils/creditScoring.js';
 import { logSecurityEvent } from '../services/securityLogs.js';
+import { evaluateLendingDecision } from '../utils/lendingDecision.js';
+import CreditReport from '../models/CreditReport.js';
+import upload from '../middleware/upload.js';
+import { handleFileUpload } from '../controllers/uploadController.js';
+import LoanDecision from '../models/LoanDecision.js';
+import path from 'path';
+import fs from 'fs';
 
 const router = express.Router();
-const upload = multer({
+
+// Ensure the upload directory exists
+const uploadDir = path.join('/tmp', 'uploads');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const uploadMulter = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
 
 // Field validation configuration
 const fieldValidations = {
-  email: {
-    required: true,
-    type: 'string',
-    validate: value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value),
-    error: 'must be a valid email address'
-  },
   paymentHistory: {
     required: true,
     type: 'number',
@@ -51,8 +59,8 @@ const fieldValidations = {
   inquiries: {
     required: true,
     type: 'number',
-    validate: value => value >= 0 && value <= 1,
-    error: 'must be a number between 0 and 1 (e.g., 0.1 for 10%)'
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer'
   },
   totalDebt: {
     required: true,
@@ -60,32 +68,69 @@ const fieldValidations = {
     validate: value => value >= 0,
     error: 'must be a positive number'
   },
-  totalCredit: {
-    required: true,
+  // New/optional fields for new batch upload component
+  activeLoanCount: {
+    required: false,
     type: 'number',
-    validate: value => value > 0,
-    error: 'must be greater than 0'
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer'
+  },
+  consecutiveMissedPayments: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer'
+  },
+  recentLoanApplications: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer'
+  },
+  oldestAccountAge: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer (months)'
+  },
+  transactionsLast90Days: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer'
+  },
+  onTimePaymentRate: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0 && value <= 1,
+    error: 'must be a number between 0 and 1'
+  },
+  defaultCountLast3Years: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer'
   },
   monthlyIncome: {
-    required: true,
+    required: false,
     type: 'number',
     validate: value => value >= 0,
     error: 'must be a positive number'
   },
   recentMissedPayments: {
-    required: true,
+    required: false,
     type: 'number',
     validate: value => value >= 0,
     error: 'must be a non-negative integer'
   },
   recentDefaults: {
-    required: true,
+    required: false,
     type: 'number',
     validate: value => value >= 0,
     error: 'must be a non-negative integer'
   },
   lastActiveDate: {
-    required: true,
+    required: false,
     type: 'string',
     validate: value => !isNaN(Date.parse(value)),
     error: 'must be a valid date (YYYY-MM-DD)'
@@ -99,7 +144,31 @@ const fieldValidations = {
     required: false,
     type: 'string',
     error: 'must be a string'
-  }
+  },
+  "phone number": {
+    required: true,
+    type: 'string',
+    validate: value => /^((\+\d{9,15})|(0\d{9,15})|(\d{9,15}))$/.test(value),
+    error: 'must be a valid phone number (9-15 digits, can start with +, 0, or just digits)'
+  },
+  loanTypeCounts: {
+    required: false,
+    type: 'object',
+    validate: value => typeof value === 'object' && value !== null,
+    error: 'must be an object (e.g., { "creditCard": 2, "carLoan": 1 })'
+  },
+  onTimeRateLast6Months: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0 && value <= 1,
+    error: 'must be a number between 0 and 1'
+  },
+  monthsSinceLastDelinquency: {
+    required: false,
+    type: 'number',
+    validate: value => value >= 0,
+    error: 'must be a non-negative integer (months)'
+  },
 };
 
 // Helper function to parse CSV content with better error handling and flexibility
@@ -327,6 +396,14 @@ const validateRecords = (records, validations) => {
       errors.push('No valid fields found in record');
     }
 
+    // After all fields are processed, ensure missedPaymentsLast12 is preserved if present
+    if (
+      'missedPaymentsLast12' in record &&
+      validatedRecord.missedPaymentsLast12 === undefined
+    ) {
+      validatedRecord.missedPaymentsLast12 = record.missedPaymentsLast12;
+    }
+
     if (errors.length === 0) {
       validRecords.push(validatedRecord);
     } else {
@@ -353,82 +430,138 @@ const validateRecords = (records, validations) => {
 // Helper to process a single record
 const processRecord = async (record, uploader, aiEnabled, req = {}) => {
   try {
-    const { email, paymentHistory, creditUtilization, creditAge, creditMix, inquiries, userId, ...extraFields } = record;
+    const { "phone number": phoneNumber, paymentHistory, creditUtilization, creditAge, creditMix, inquiries, userId, loanTypeCounts, missedPaymentsLast12, monthsSinceLastDelinquency, ...extraFields } = record;
     
     console.log('\n=== PROCESSING RECORD ===');
     console.log('Record data:', JSON.stringify(record, null, 2));
     
-    // Find user by userId or email
+    // Find user by userId or phoneNumber
     let user;
     if (userId) {
       console.log(`Looking up user by ID: ${userId}`);
       user = await User.findById(userId);
-    } else if (email) {
-      // Normalize email: trim and convert to lowercase
-      const normalizedEmail = email.toString().trim().toLowerCase();
-      console.log(`Looking up user by email: "${email}" (normalized: "${normalizedEmail}")`);
-      
-      // First try direct match with the exact email
-      user = await User.findOne({ email: normalizedEmail });
-      
-      // If not found, try case-insensitive search with regex
-      if (!user) {
-        console.log('Exact match not found, trying case-insensitive search...');
-        user = await User.findOne({ 
-          email: { $regex: new RegExp(`^${normalizedEmail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
-        });
-      }
-      
-      // If still not found, log all users for debugging
-      if (!user) {
-        console.log('User not found with case-insensitive search');
-        const allUsers = await User.find({}, 'email').lean();
-        console.log('Available users in database:');
-        const userEmails = allUsers.map(u => `- "${u.email}"`).join('\n') || 'No users found';
-        console.log(userEmails);
-        
-        // Try direct match with the exact email that exists in the database
-        const exactMatch = allUsers.find(u => u.email === normalizedEmail);
-        if (exactMatch) {
-          console.log('Found exact match with direct comparison');
-          user = exactMatch;
-        }
-      }
+    } else if (phoneNumber) {
+      console.log(`Looking up user by phone: "${phoneNumber}"`);
+      user = await User.findOne({ phoneNumber });
     }
     
     if (!user) {
-      const errorMsg = `User not found: ${email || userId}. Make sure the user exists in the database.`;
+      const errorMsg = `User not found: ${phoneNumber || userId}. Make sure the user exists in the database.`;
       console.error(errorMsg);
       throw new Error(errorMsg);
     }
     
-    console.log(`Found user: ${user.email} (ID: ${user._id})`);
+    console.log(`Found user: ${user.phoneNumber} (ID: ${user._id})`);
     
     // Process credit factors
-    console.log('Processing credit factors for user:', user.email);
+    console.log('Processing credit factors for user:', user.phoneNumber);
     
     // Prepare credit factors with proper values
     const creditFactors = {
-      paymentHistory: parseFloat(paymentHistory),
-      creditUtilization: parseFloat(creditUtilization),
-      creditAge: parseFloat(creditAge),
-      creditMix: parseFloat(creditMix),
-      inquiries: parseFloat(inquiries),
+      paymentHistory: parseFloat(paymentHistory ?? record.onTimePaymentRate ?? 0),
+      creditUtilization: {
+        overall: parseFloat(creditUtilization ?? record.utilization ?? record.creditUtilizationOverall ?? 0),
+        byAccount: []
+      },
+      creditAge: parseFloat(creditAge ?? record.oldestAccountAge ?? record.accountAge ?? 0),
+      creditMix: parseFloat(creditMix ?? record.mix ?? 0),
+      inquiries: parseFloat(inquiries ?? record.recentLoanApplications ?? record.hardInquiries ?? 0),
       ...extraFields
     };
 
     console.log('Credit factors:', JSON.stringify(creditFactors, null, 2));
     
-    // Calculate score using imported function
-    const score = calculateScore({
+    // --- FIX: Ensure lastActiveDate is a Date object ---
+    let lastActiveDateValue = record.lastActiveDate;
+    if (lastActiveDateValue && typeof lastActiveDateValue === 'string') {
+      lastActiveDateValue = new Date(lastActiveDateValue);
+      if (isNaN(lastActiveDateValue.getTime())) {
+        lastActiveDateValue = new Date(); // fallback to now if invalid
+      }
+    } else if (!lastActiveDateValue) {
+      lastActiveDateValue = new Date();
+    }
+
+    // --- FIX: Ensure loanTypeCounts is always extracted and passed correctly ---
+    let loanTypeCountsValue = loanTypeCounts;
+    if (!loanTypeCountsValue && extraFields.loanTypeCounts) {
+      loanTypeCountsValue = extraFields.loanTypeCounts;
+    }
+    if (!loanTypeCountsValue || typeof loanTypeCountsValue !== 'object') {
+      try {
+        loanTypeCountsValue = loanTypeCountsValue ? JSON.parse(loanTypeCountsValue) : {};
+      } catch {
+        loanTypeCountsValue = {};
+      }
+    }
+    console.log('loanTypeCounts in record:', JSON.stringify(record.loanTypeCounts));
+    console.log('loanTypeCounts in extraFields:', JSON.stringify(extraFields.loanTypeCounts));
+    console.log('loanTypeCountsValue used:', JSON.stringify(loanTypeCountsValue));
+
+    // Log what is passed to calculateScore
+    const scoreInput = {
       paymentHistory: creditFactors.paymentHistory,
-      creditUtilization: creditFactors.creditUtilization,
+      creditUtilization: creditFactors.creditUtilization.overall,
       creditAge: creditFactors.creditAge,
       creditMix: creditFactors.creditMix,
-      inquiries: creditFactors.inquiries
-    });
+      inquiries: creditFactors.inquiries,
+      totalDebt: record.totalDebt,
+      recentMissedPayments: record.recentMissedPayments,
+      recentDefaults: record.recentDefaults,
+      lastActiveDate: lastActiveDateValue,
+      activeLoanCount: record.activeLoanCount,
+      oldestAccountAge: record.oldestAccountAge,
+      transactionsLast90Days: record.transactionsLast90Days,
+      onTimePaymentRate: record.onTimePaymentRate,
+      recentLoanApplications: record.recentLoanApplications,
+      defaultCountLast3Years: record.defaultCountLast3Years,
+      consecutiveMissedPayments: record.consecutiveMissedPayments,
+      loanTypeCounts: loanTypeCountsValue,
+      missedPaymentsLast12:
+        Number.isFinite(Number(record.missedPaymentsLast12))
+          ? Number(record.missedPaymentsLast12)
+          : Number.isFinite(Number(record.recentMissedPayments))
+            ? Number(record.recentMissedPayments)
+            : 0,
+      onTimeRateLast6Months: Number.isFinite(Number(record.onTimeRateLast6Months)) ? Number(record.onTimeRateLast6Months) : 1,
+      monthsSinceLastDelinquency: Number.isFinite(Number(record.monthsSinceLastDelinquency)) ? Number(record.monthsSinceLastDelinquency) : 999
+    };
+    console.log('Data passed to calculateScore:', JSON.stringify(scoreInput, null, 2));
+
+    // Calculate score using imported function
+    const score = calculateScore(scoreInput);
 
     console.log('Calculated score:', score);
+
+    // Prepare userData for lending decision engine
+    const userData = {
+      recentDefaults: parseInt(record.recentDefaults ?? 0),
+      consecutiveMissedPayments: parseInt(record.consecutiveMissedPayments ?? 0),
+      missedPaymentsLast12: parseInt(record.missedPaymentsLast12 ?? 0),
+      recentLoanApplications: parseInt(record.recentLoanApplications ?? 0),
+      activeLoanCount: parseInt(record.activeLoanCount ?? 0),
+      onTimeRateLast6Months: parseFloat(record.onTimeRateLast6Months ?? 1),
+      monthsSinceLastDelinquency: parseInt(record.monthsSinceLastDelinquency ?? 999)
+    };
+
+    // Generate lending decision
+    let lendingDecision;
+    try {
+      lendingDecision = evaluateLendingDecision(
+        typeof score === 'object' ? score : { score },
+        userData
+      );
+    } catch (err) {
+      console.error('Error generating lending decision:', err);
+      lendingDecision = {
+        decision: 'Error',
+        reasons: [err.message],
+        recommendation: null,
+        riskFlags: ['ENGINE_ERROR'],
+        engineVersion: 'v101',
+        evaluatedAt: new Date()
+      };
+    }
 
     // Helper function to get factor status
     const getFactorStatus = (value, goodThreshold = 0.7, fairThreshold = 0.4) => {
@@ -447,9 +580,9 @@ const processRecord = async (record, uploader, aiEnabled, req = {}) => {
       },
       {
         name: 'Credit Utilization',
-        value: creditFactors.creditUtilization,
+        value: creditFactors.creditUtilization.overall,
         impact: 'high',
-        status: getFactorStatus(creditFactors.creditUtilization, 0.3, 0.5)
+        status: getFactorStatus(creditFactors.creditUtilization.overall, 0.3, 0.5)
       },
       {
         name: 'Credit Age',
@@ -501,7 +634,7 @@ const processRecord = async (record, uploader, aiEnabled, req = {}) => {
       return statusMap[status] || 'neutral';
     };
 
-    // Create credit score document with proper structure
+    // Create credit score document with lending decision
     const creditScore = await CreditScore.create({
       user: userIdStr,
       score: score.score, // Extract the numeric score
@@ -518,7 +651,15 @@ const processRecord = async (record, uploader, aiEnabled, req = {}) => {
         impact: factor.impact,
         status: mapStatus(factor.status),
         description: factor.description || ''
-      }))
+      })),
+      lendingDecision: {
+        decision: lendingDecision.decision,
+        reasons: lendingDecision.reasons,
+        recommendation: lendingDecision.recommendation,
+        riskFlags: lendingDecision.riskFlags,
+        engineVersion: lendingDecision.engineVersion,
+        evaluatedAt: new Date()
+      }
     });
     
     console.log(`Credit score ${creditScore._id} created for user ${userIdStr}`);
@@ -527,19 +668,37 @@ const processRecord = async (record, uploader, aiEnabled, req = {}) => {
 
     // Update user's credit score and history
     const numericScore = typeof score === 'object' ? score.score : score; // Extract numeric score if score is an object
-    await User.findByIdAndUpdate(user._id, {
-      creditScore: numericScore,
-      creditScoreLastUpdated: new Date(),
-      $push: {
-        creditHistory: {
-          score: numericScore,
-          date: new Date(),
-          factors: factors,
-          notes: notes,
-          breakdown: score?.breakdown || {}
+    try {
+      console.log('Attempting to update user with new credit score:', {
+        userId: user._id,
+        creditScoreId: creditScore._id,
+        creditScoreLastUpdated: new Date()
+      });
+      const updateResult = await User.findByIdAndUpdate(user._id, {
+        creditScore: creditScore._id, // Store the CreditScore document ID
+        creditScoreLastUpdated: new Date(),
+        $push: {
+          creditHistory: {
+            score: numericScore,
+            date: new Date(),
+            factors: factors,
+            notes: notes,
+            breakdown: score?.breakdown || {},
+            source: 'batch_upload'
+          }
         }
+      }, { new: true });
+      if (!updateResult) {
+        console.error('User update failed: No user found with _id', user._id);
+      } else {
+        console.log('User updated successfully:', updateResult._id, 'Updated user:', updateResult);
       }
-    });
+    } catch (err) {
+      console.error('Error updating user:', err, {
+        userId: user._id,
+        creditScoreId: creditScore._id
+      });
+    }
 
     // Update UserScore
     const userIdString = user._id.toString();
@@ -573,7 +732,7 @@ const processRecord = async (record, uploader, aiEnabled, req = {}) => {
           targetUserId: user._id,
           score: numericScore,
           method: aiEnabled ? 'AI' : 'manual',
-          filename: req?.file?.originalname || 'unknown',
+          filename: req?.file?.originalname || req?.body?.filename || 'json-upload',
           uploader: uploader._id
         },
         ipAddress: req.ip || '127.0.0.1',
@@ -584,10 +743,75 @@ const processRecord = async (record, uploader, aiEnabled, req = {}) => {
       // Don't fail the whole operation if logging fails
     }
 
+    // Update or create CreditReport for this user
+    const creditUtilizationValue = factors.find(f => f.name === 'creditUtilization')?.value ?? record.creditUtilization ?? 0;
+    const creditReportUpdate = {
+      userId: user._id,
+      creditScore: { fico: { score: score.score } },
+      creditUtilization: { overall: creditUtilizationValue },
+      creditAgeMonths: record.creditAge ?? 0,
+      creditMix: record.creditMix ?? 0,
+      totalDebt: record.totalDebt ?? 0,
+      recentMissedPayments: record.recentMissedPayments ?? 0,
+      recentDefaults: record.recentDefaults ?? 0,
+      openAccounts: record.activeLoanCount ?? 0,
+      lastActiveDate: record.lastActiveDate ? new Date(record.lastActiveDate) : undefined,
+      paymentHistory: record.paymentHistory ?? 0,
+      updatedAt: new Date(),
+      lendingDecision: {
+        decision: lendingDecision.decision,
+        reasons: lendingDecision.reasons,
+        recommendations: lendingDecision.recommendations,
+        evaluatedAt: new Date()
+      }
+    };
+    await CreditReport.findOneAndUpdate(
+      { userId: user._id },
+      {
+        $set: creditReportUpdate,
+        $push: {
+          lendingDecisionHistory: {
+            decision: lendingDecision.decision,
+            reasons: lendingDecision.reasons,
+            recommendations: lendingDecision.recommendations,
+            evaluatedAt: new Date()
+          }
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    // --- NEW: Upsert LoanDecision for this user ---
+    await LoanDecision.findOneAndUpdate(
+      { userId: user._id },
+      {
+        userId: user._id,
+        creditScore: score.score,
+        decision: {
+          ...lendingDecision,
+          recommendation: lendingDecision.recommendation,
+          monthlyPayment: lendingDecision.monthlyPayment
+        },
+        engineVersion: lendingDecision.engineVersion || 'v101',
+        timestamp: new Date()
+      },
+      { upsert: true, new: true }
+    );
+    // --- Optionally, push into user's loan history ---
+    await User.findByIdAndUpdate(user._id, {
+      $push: {
+        loanHistory: {
+          decision: lendingDecision,
+          creditScore: score.score,
+          timestamp: new Date()
+        }
+      }
+    });
+
     return {
       success: true,
       record: {
-        email: user.email,
+        phoneNumber: user.phoneNumber,
         userId: user._id,
         score,
         creditScoreId: creditScore._id
@@ -609,448 +833,89 @@ const processRecord = async (record, uploader, aiEnabled, req = {}) => {
  * @desc    Batch upload user credit data and calculate scores
  * @access  Private/Admin
  */
-router.post('/batch', auth, requireAdmin, upload.single('file'), async (req, res) => {
-  if (!req.file) {
-    console.error('No file was uploaded');
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
-
-  if (!req.user?.id) {
-    console.error('Unauthorized upload attempt - no user ID');
-    return res.status(401).json({ error: 'Authentication required' });
-  }
-
-  const uploader = req.user;
-  console.log(`Starting batch upload by user: ${uploader._id} (${uploader.email})`);
-  const aiEnabled = req.body.aiEnabled === 'true';
-  console.log(`AI scoring is ${aiEnabled ? 'enabled' : 'disabled'}`);
-  
+router.post('/batch', auth, requireAdmin, uploadMulter.single('file'), async (req, res) => {
+  // Debug logging to diagnose upload issues
+  console.log('DEBUG /batch:', {
+    hasFile: !!req.file,
+    fileType: req.file?.mimetype,
+    fileName: req.file?.originalname,
+    fileSize: req.file?.size,
+    isJson: req.is('application/json'),
+    bodyKeys: Object.keys(req.body)
+  });
+  // Accept both file upload and direct JSON
   let records = [];
-  let fileContent = '';
+  const uploader = req.user;
+  const aiEnabled = req.body.aiEnabled === 'true' || req.body.aiEnabled === true;
 
   try {
-    // Log upload start
-    console.log('\n===== STARTING FILE UPLOAD =====');
-    console.log('Upload details:', {
-      name: req.file.originalname,
-      type: req.file.mimetype,
-      size: req.file.size,
-      fields: req.body,
-      user: req.user ? req.user.email : 'unknown'
-    });
-    
-    // Parse file content
-    const fileBuffer = req.file.buffer;
-    fileContent = fileBuffer.toString('utf8').trim();
-    
-    console.log('\nFile content sample (first 200 chars):');
-    console.log('----------------------------------------');
-    console.log(fileContent.substring(0, 200) + (fileContent.length > 200 ? '...' : ''));
-    console.log('----------------------------------------');
-    
-    // Log first few lines for CSV or first object for JSON
-    if (fileContent.includes('\n')) {
-      const lines = fileContent.split('\n').slice(0, 3);
-      console.log('First 3 lines of file:', lines);
-    }
-
-    if (fileContent.startsWith('[') || fileContent.startsWith('{')) {
-      console.log('Processing as JSON file');
-      // JSON parsing
-      const parsed = JSON.parse(fileContent);
-      records = Array.isArray(parsed)
-        ? parsed
-        : parsed.batchData
-          ? Array.isArray(parsed.batchData) ? parsed.batchData : [parsed.batchData]
-          : [parsed];
-    } else {
-      console.log('Processing as CSV file');
-      // CSV parsing
-      records = await parseCSV(fileContent);
-      console.log(`Parsed ${records.length} records from CSV`);
-      if (records.length > 0) {
-        console.log('First record sample:', JSON.stringify(records[0], null, 2));
+    if (req.file && req.file.buffer) {
+      console.log('DEBUG typeof req.file.buffer:', typeof req.file.buffer);
+      console.log('DEBUG req.file.buffer:', req.file.buffer);
+      const fileBuffer = req.file.buffer;
+      const fileContent = fileBuffer.toString('utf8').trim();
+      console.log('DEBUG fileContent:', fileContent.substring(0, 200));
+      if (fileContent.startsWith('[') || fileContent.startsWith('{')) {
+        const parsed = JSON.parse(fileContent);
+        records = Array.isArray(parsed)
+          ? parsed
+          : parsed.batchData
+            ? Array.isArray(parsed.batchData) ? parsed.batchData : [parsed.batchData]
+            : [parsed];
+      } else {
+        records = await parseCSV(fileContent);
       }
+    } else if (req.is('application/json')) {
+      // --- Direct JSON upload path ---
+      if (Array.isArray(req.body)) {
+        records = req.body;
+      } else if (Array.isArray(req.body.batchData)) {
+        records = req.body.batchData;
+      } else if (typeof req.body === 'object') {
+        records = [req.body];
+      } else {
+        throw new Error('Invalid JSON format');
+      }
+    } else {
+      return res.status(400).json({ error: 'No file uploaded and no valid JSON body' });
     }
 
     if (!Array.isArray(records) || records.length === 0) {
-      throw new Error('No valid records found in the file');
+      throw new Error('No valid records found in the upload');
     }
 
-    // Log sample of parsed records before validation
-    console.log('Sample of parsed records before validation:', {
-      count: records.length,
-      firstRecord: records[0] ? {
-        keys: Object.keys(records[0]),
-        values: Object.entries(records[0]).map(([k, v]) => [k, v, typeof v])
-      } : 'No records',
-      fieldValidations: Object.keys(fieldValidations)
+    // Normalize phone number field for all records
+    records = records.map(record => {
+      if (record['phone number'] && !record['phoneNumber']) {
+        return { ...record, phoneNumber: record['phone number'] };
+      }
+      return record;
     });
-
-    // Log all required fields for debugging
-    console.log('Required fields:', Object.entries(fieldValidations)
-      .filter(([_, v]) => v.required)
-      .map(([k, _]) => k)
-    );
 
     // Validate records
-    console.log(`Validating ${records.length} records...`);
     const { validRecords, invalidRecords } = validateRecords(records, fieldValidations);
-    
-    console.log(`Validation results: ${validRecords.length} valid, ${invalidRecords.length} invalid`);
-    
     if (invalidRecords.length > 0) {
-      console.log('First 3 invalid records with errors:');
-      invalidRecords.slice(0, 3).forEach((ir, idx) => {
-        console.log(`\nInvalid Record ${idx + 1}:`);
-        console.log('Data:', JSON.stringify(ir.record, null, 2));
-        console.log('Reason:', ir.reason);
-        if (ir.errors && ir.errors.length > 0) {
-          console.log('Validation Errors:');
-          ir.errors.forEach((err, i) => console.log(`  ${i + 1}. ${err}`));
-        }
-        
-        // Log missing required fields
-        const missingFields = Object.keys(fieldValidations)
-          .filter(field => fieldValidations[field].required && ir.record[field] === undefined);
-          
-        if (missingFields.length > 0) {
-          console.log('Missing required fields:', missingFields);
-        }
-      });
-      
-      if (invalidRecords.length > 3) {
-        console.log(`... and ${invalidRecords.length - 3} more invalid records`);
-      }
-    }
-    if (validRecords.length === 0) {
-      const errorMessage = invalidRecords.length > 0
-        ? invalidRecords.map(ir => ir.reason).join('\n')
-        : 'No valid records found';
-        
-      console.error('No valid records found. Details:', {
-        totalRecords: records.length,
-        invalidCount: invalidRecords.length,
-        firstFewErrors: invalidRecords.slice(0, 3).map(ir => ({
-          record: Object.keys(ir.record || {}),
-          reason: ir.reason,
-          errors: ir.errors
-        }))
-      });
-        
-      throw new Error(`No valid records found. First error: ${invalidRecords[0]?.reason || 'Unknown error'}`);
+      return res.status(400).json({ error: 'Invalid records found', invalidRecords });
     }
 
-    // Create upload history
-    const uploadHistory = new UploadHistory({
-      filename: req.file.originalname,
-      uploadedBy: uploader._id,
-      recordCount: validRecords.length,
-      successCount: 0,
-      errorCount: 0,
-      aiEnabled,
-      status: 'processing',
-      metadata: {
-        originalFilename: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size
-      }
-    });
-    await uploadHistory.save();
+    // Process valid records
+    const results = await pMap(validRecords, async record => {
+      return processRecord(record, uploader, aiEnabled, req);
+    }, { concurrency: 5 });
 
-    // Log security event
-    await logSecurityEvent({
-      userId: uploader._id,
-      action: 'BATCH_UPLOAD_START',
-      details: {
-        filename: req.file.originalname,
-        recordCount: validRecords.length,
-        uploadId: uploadHistory._id
-      },
-      ipAddress: req.ip,
-      userAgent: req.headers['user-agent']
-    });
+    // Filter out successful results
+    const successfulResults = results.filter(result => result.success);
+    if (successfulResults.length === 0) {
+      throw new Error('No valid records processed');
+    }
 
-    // Process records
-    const processedRecords = [];
-    const failedRecords = [];
-    console.log(`Starting to process ${validRecords.length} valid records...`);
-
-    const processedResults = await pMap(validRecords, 
-      record => processRecord(record, req.user, aiEnabled, req), 
-      { concurrency: 5 }
-    );
-
-    console.log(`Processing complete: ${processedResults.length} records processed`);
-
-    processedResults.forEach((result, index) => {
-      if (result.success) {
-        console.log(`Record ${index + 1} processed successfully:`, JSON.stringify(result, null, 2));
-        processedRecords.push(result);
-        uploadHistory.successCount++;
-      } else {
-        console.error(`Error processing record ${index + 1}:`, result.error);
-        failedRecords.push({
-          index,
-          email: result.record?.email || 'unknown',
-          error: result.error || 'Unknown error'
-        });
-        uploadHistory.errorCount++;
-      }
-    });
-
-    // Finalize upload history
-    uploadHistory.status = 'completed';
-    uploadHistory.processedAt = new Date();
-    await uploadHistory.save();
-
-    // Log completion
-    await logSecurityEvent({
-      userId: uploader._id,  // Fixed: changed from uploader.userId to uploader._id
-      action: 'BATCH_UPLOAD_COMPLETE',
-      details: {
-        uploadId: uploadHistory._id,
-        successCount: processedRecords.length,
-        errorCount: failedRecords.length
-      }
-    });
-
-    return res.json({
-      success: true,
-      message: 'Batch upload completed',
-      totalRecords: validRecords.length,
-      successCount: processedRecords.length,
-      errorCount: failedRecords.length,
-      uploadId: uploadHistory._id
-    });
+    return res.status(200).json({ message: 'Batch upload completed successfully', results: successfulResults });
   } catch (error) {
-    console.error('===== BATCH UPLOAD ERROR =====');
-    console.error('Error Message:', error.message);
-    console.error('Error Stack:', error.stack);
-    console.error('Error Name:', error.name);
-    console.error('Request Body:', JSON.stringify(req.body, null, 2));
-    console.error('File Info:', req.file ? {
-      originalname: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size
-    } : 'No file uploaded');
-    console.error('User:', req.user ? {
-      _id: req.user._id,
-      email: req.user.email,
-      role: req.user.role
-    } : 'No user authenticated');
-    console.error('=============================');
-
-    // Save error to upload history if possible
-    if (req.user?._id && req.file) {
-      try {
-        const errorHistory = new UploadHistory({
-          uploadedBy: req.user._id,
-          filename: req.file.originalname,
-          status: 'failed',
-          errors: [{
-            message: error.message,
-            stack: error.stack,
-            name: error.name,
-            code: error.code
-          }],
-          metadata: {
-            error: error.message,
-            stack: error.stack,
-            requestBody: req.body,
-            fileInfo: {
-              originalname: req.file.originalname,
-              mimetype: req.file.mimetype,
-              size: req.file.size
-            }
-          }
-        });
-        await errorHistory.save();
-      } catch (saveError) {
-        console.error('Failed to save upload history:', saveError);
-      }
-    }
-
-    // Determine appropriate status code
-    let statusCode = 500;
-    if (error.message.includes('No valid') || error.name === 'ValidationError') {
-      statusCode = 400;
-    } else if (error.name === 'UnauthorizedError') {
-      statusCode = 401;
-    } else if (error.name === 'ForbiddenError') {
-      statusCode = 403;
-    } else if (error.name === 'NotFoundError') {
-      statusCode = 404;
-    }
-
-    // Prepare error response
-    const errorResponse = {
-      success: false,
-      error: error.message || 'An unexpected error occurred',
-      message: error.message || 'An unexpected error occurred during file upload',
-      errorType: error.name || 'ServerError',
-      timestamp: new Date().toISOString(),
-      requestId: req.id || 'unknown',
-    };
-
-    // Add stack trace in development
-    if (process.env.NODE_ENV === 'development') {
-      errorResponse.stack = error.stack;
-      errorResponse.details = {
-        ...error,
-        request: {
-          method: req.method,
-          url: req.originalUrl,
-          headers: req.headers,
-          body: req.body,
-          file: req.file ? {
-            originalname: req.file.originalname,
-            mimetype: req.file.mimetype,
-            size: req.file.size
-          } : null
-        }
-      };
-    }
-
-    return res.status(statusCode).json(errorResponse);
+    console.error('Error processing batch upload:', error);
+    return res.status(500).json({ error: 'Error processing batch upload' });
   }
 });
 
-/**
- * @route   GET /api/upload
- * @desc    Get paginated list of uploads with optional sorting and filtering
- * @access  Private/Admin
- */
-router.get('/', auth, requireAdmin, async (req, res) => {
-  try {
-    // Pagination
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    // Sorting
-    const sortBy = req.query.sortBy || 'createdAt';
-    const sortOrder = req.query.sortOrder === 'asc' ? 1 : -1;
-    const sort = { [sortBy]: sortOrder };
-
-    // Build query
-    const query = {};
-    
-    // Optional filters
-    if (req.query.status) {
-      query.status = req.query.status;
-    }
-    if (req.query.uploadedBy) {
-      query.uploadedBy = req.query.uploadedBy;
-    }
-    if (req.query.startDate || req.query.endDate) {
-      query.createdAt = {};
-      if (req.query.startDate) {
-        query.createdAt.$gte = new Date(req.query.startDate);
-      }
-      if (req.query.endDate) {
-        query.createdAt.$lte = new Date(req.query.endDate);
-      }
-    }
-
-    // Get total count for pagination
-    const total = await UploadHistory.countDocuments(query);
-
-    // Get paginated results
-    const uploads = await UploadHistory.find(query)
-      .populate('uploadedBy', 'name email')
-      .sort(sort)
-      .skip(skip)
-      .limit(limit)
-      .lean();
-
-    // Calculate pagination metadata
-    const totalPages = Math.ceil(total / limit);
-    const hasNextPage = page < totalPages;
-    const hasPreviousPage = page > 1;
-
-    res.json({
-      data: uploads,
-      pagination: {
-        total,
-        totalPages,
-        currentPage: page,
-        hasNextPage,
-        hasPreviousPage,
-        limit
-      },
-      sort: {
-        by: sortBy,
-        order: sortOrder === 1 ? 'asc' : 'desc'
-      }
-    });
-
-  } catch (error) {
-    console.error('Error fetching upload history:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to fetch upload history',
-      message: error.message 
-    });
-  }
-});
-
-/**
- * @route   GET /api/upload/history/:uploadId/report
- * @desc    Generate and download a report for a specific upload
- * @access  Private/Admin
- */
-router.get('/history/:uploadId/report', auth, requireAdmin, async (req, res) => {
-  try {
-    const { uploadId } = req.params;
-    const uploadHistory = await UploadHistory.findById(uploadId);
-    
-    if (!uploadHistory) {
-      return res.status(404).json({ error: 'Upload not found' });
-    }
-
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Upload Report');
-
-    // Add headers
-    worksheet.columns = [
-      { header: 'Row', key: 'index', width: 10 },
-      { header: 'Email', key: 'email', width: 30 },
-      { header: 'Status', key: 'status', width: 15 },
-      { header: 'Score', key: 'score', width: 15 },
-      { header: 'Message', key: 'message', width: 50 }
-    ];
-
-    // Add data (simplified for example)
-    worksheet.addRow({
-      index: 1,
-      email: 'example@test.com',
-      status: 'success',
-      score: 750,
-      message: 'Processed successfully'
-    });
-
-    // Set response headers
-    res.setHeader(
-      'Content-Type',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    );
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename=upload-report-${uploadId}.xlsx`
-    );
-
-    // Send workbook
-    await workbook.xlsx.write(res);
-    res.end();
-
-  } catch (error) {
-    console.error('Report generation error:', error);
-    res.status(500).json({ 
-      error: 'Failed to generate report',
-      message: error.message 
-    });
-  }
-});
+router.post('/upload', upload.single('file'), handleFileUpload);
 
 export default router;

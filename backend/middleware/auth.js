@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import User from '../models/User.js';
+import userService from '../services/userService.js';
 import { logger, securityLogger } from '../config/logger.js';
 import AppError from '../utils/appError.js';
 
@@ -41,7 +41,7 @@ const protect = async (req, res, next) => {
     const decoded = await jwt.verify(token, process.env.JWT_SECRET);
 
     // 4) Check if user still exists
-    const currentUser = await User.findById(decoded.id).select('+passwordChangedAt');
+    const currentUser = await userService.findById(decoded.id);
     if (!currentUser) {
       securityLogger.warn('Authentication failed: User no longer exists', { 
         userId: decoded.id,
@@ -53,7 +53,7 @@ const protect = async (req, res, next) => {
     }
 
     // 5) Check if user changed password after the token was issued
-    if (currentUser.changedPasswordAfter(decoded.iat)) {
+    if (currentUser.passwordChangedAt && decoded.iat < currentUser.passwordChangedAt.getTime() / 1000) {
       securityLogger.warn('Authentication failed: User recently changed password', { 
         userId: currentUser._id,
         ip: req.ip 
@@ -75,9 +75,10 @@ const protect = async (req, res, next) => {
       );
     }
 
-    // 7) Check if email is verified (if required)
+    // 7) Check if email is verified (skip for admin users)
     if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && 
-        !currentUser.isEmailVerified && 
+        currentUser.role !== 'admin' &&
+        !currentUser.emailVerified && 
         !req.path.includes('verify-email') &&
         !req.path.includes('resend-verification')) {
       securityLogger.warn('Authentication failed: Email not verified', { 
@@ -144,13 +145,13 @@ const isLoggedIn = async (req, res, next) => {
       const decoded = await jwt.verify(req.cookies.jwt, process.env.JWT_SECRET);
 
       // 2) Check if user still exists
-      const currentUser = await User.findById(decoded.id);
+      const currentUser = await userService.findById(decoded.id);
       if (!currentUser) {
         return next();
       }
 
       // 3) Check if user changed password after the token was issued
-      if (currentUser.changedPasswordAfter(decoded.iat)) {
+      if (currentUser.passwordChangedAt && decoded.iat < currentUser.passwordChangedAt.getTime() / 1000) {
         return next();
       }
 
@@ -222,22 +223,6 @@ const requirePremium = requireRole(['premium']);
 // Import ROLES from constants
 import { ROLES } from '../constants/roles.js';
 
-// Export all middleware functions
-export {
-  protect as auth,
-  protect,
-  authorize,
-  isLoggedIn,
-  requireRole,
-  requireAdmin,
-  requireLender,
-  requireUser,
-  requireAnalyst,
-  requirePremium,
-  maskSensitiveResponse,
-  ROLES
-};
-
 // Helper function to mask sensitive data
 const maskSensitiveData = (data) => {
   if (!data) return data;
@@ -264,24 +249,18 @@ const maskSensitiveResponse = (req, res, next) => {
   next();
 };
 
-// Add JWT helper methods to the User model
-User.prototype.createPasswordResetToken = function() {
-  const resetToken = crypto.randomBytes(32).toString('hex');
-  this.passwordResetToken = crypto
-    .createHash('sha256')
-    .update(resetToken)
-    .digest('hex');
-  this.passwordResetExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
-  return resetToken;
-};
-
-User.prototype.changedPasswordAfter = function(JWTTimestamp) {
-  if (this.passwordChangedAt) {
-    const changedTimestamp = parseInt(
-      this.passwordChangedAt.getTime() / 1000,
-      10
-    );
-    return JWTTimestamp < changedTimestamp;
-  }
-  return false;
+// Export all middleware functions
+export {
+  protect as auth,
+  protect,
+  authorize,
+  isLoggedIn,
+  requireRole,
+  requireAdmin,
+  requireLender,
+  requireUser,
+  requireAnalyst,
+  requirePremium,
+  maskSensitiveResponse,
+  ROLES
 };

@@ -11,14 +11,25 @@ import rateLimit from 'express-rate-limit';
 import hpp from 'hpp';
 import xss from 'xss-clean';
 import morgan from 'morgan';
-import winston from 'winston';
 import { createTerminus } from '@godaddy/terminus';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import lenderRoutes from './routes/lender.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { connectDB, closeDB } from './config/db.js';
+import { logger } from './config/logger.js';
+import { initAdmin } from './scripts/init-admin.js';
+import User from './models/User.js';
 
 // Configure environment variables FIRST
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(__dirname, '.env') });
+console.log('DEBUG: MONGODB_URI from process.env:', process.env.MONGODB_URI);
+console.log('DEBUG: Current working directory:', process.cwd());
+console.log('DEBUG: .env file path:', path.join(__dirname, '.env'));
 
 // Initialize express app and server
 const app = express();
@@ -30,34 +41,6 @@ const HOST = process.env.HOST || '0.0.0.0';
 const API_PREFIX = '/api/v1';
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 const NODE_ENV = process.env.NODE_ENV || 'development';
-const MONGODB_URI = process.env.MONGODB_URI || '';
-
-// Initialize logger
-const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple()
-      )
-    })
-  ]
-});
-
-// Validate MongoDB URI immediately
-if (!MONGODB_URI) {
-  logger.error('MONGODB_URI is not defined in environment variables');
-  process.exit(1);
-}
-
-// Log masked MongoDB URI for verification (never log actual credentials)
-const maskedMongoURI = MONGODB_URI.replace(/\/\/[^:]+:[^@]+@/, '//***:***@');
-logger.info(`Connecting to MongoDB: ${maskedMongoURI}`);
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
@@ -149,7 +132,6 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import adminRoutes from './routes/admin.js';
 import debugRoutes from './routes/debugRoutes.js';
 import uploadHistoryRoutes from './routes/uploadHistoryRoutes.js';
-import User from './models/User.js';
 import CreditScore from './models/CreditScore.js';
 
 // Mount routes
@@ -288,6 +270,20 @@ app.get(`${API_PREFIX}/users/:identifier/credit-data`, protect, async (req, res)
   }
 });
 
+// Simple admin user check
+const ensureAdminUser = async () => {
+  try {
+    const existingAdmin = await User.findOne({ role: 'admin' });
+    if (existingAdmin) {
+      logger.info(`Admin user ${existingAdmin.email} exists`);
+      return;
+    }
+    logger.info('No admin user found, but continuing...');
+  } catch (error) {
+    logger.error('Error checking admin user:', error);
+  }
+};
+
 /**
  * Starts the server with MongoDB Atlas connection
  */
@@ -295,49 +291,9 @@ const startServer = async () => {
   try {
     logger.info('Starting server initialization...');
     
-    // Validate required environment variables
-    const requiredEnvVars = ['JWT_SECRET', 'ADMIN_EMAIL', 'ADMIN_PASSWORD'];
-    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
-    
-    if (missingVars.length > 0) {
-      throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
-    }
-    
-    // Connect to MongoDB Atlas with retries
-    const maxRetries = 5;
-    let retryCount = 0;
-    
-    while (retryCount < maxRetries) {
-      try {
-        logger.info(`Connecting to MongoDB Atlas (attempt ${retryCount + 1}/${maxRetries})`);
-        
-        await mongoose.connect(MONGODB_URI, {
-          serverSelectionTimeoutMS: 10000,
-          connectTimeoutMS: 30000,
-          socketTimeoutMS: 45000,
-          maxPoolSize: 10,
-        });
-        
-        logger.info('MongoDB Atlas connected successfully');
-        break;
-      } catch (error) {
-        retryCount++;
-        
-        if (retryCount < maxRetries) {
-          const waitTime = 2000 * retryCount;
-          logger.error(`Connection failed: ${error.message}`);
-          logger.warn(`Retrying in ${waitTime}ms...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-        } else {
-          throw new Error(`Failed to connect to MongoDB after ${maxRetries} attempts: ${error.message}`);
-        }
-      }
-    }
-    
-    // MongoDB event handlers
-    mongoose.connection.on('connected', () => logger.info('MongoDB connected'));
-    mongoose.connection.on('error', (err) => logger.error('MongoDB error:', err));
-    mongoose.connection.on('disconnected', () => logger.warn('MongoDB disconnected'));
+    // Connect to MongoDB using the simplified connectDB function
+    await connectDB();
+    logger.info('MongoDB connected successfully');
     
     // Ensure admin user exists
     await ensureAdminUser();
@@ -350,61 +306,7 @@ const startServer = async () => {
     
   } catch (error) {
     logger.error('Server startup failed:', error);
-    
-    try {
-      await mongoose.connection.close();
-      logger.info('MongoDB connection closed');
-    } catch (dbError) {
-      logger.error('Error closing MongoDB connection:', dbError);
-    }
-    
     process.exit(1);
-  }
-};
-
-/**
- * Ensures an admin user exists with hashed password
- */
-const ensureAdminUser = async () => {
-  const { ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME = 'System Administrator' } = process.env;
-  
-  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
-    throw new Error('ADMIN_EMAIL and ADMIN_PASSWORD must be set');
-  }
-
-  try {
-    const existingAdmin = await User.findOne({ email: ADMIN_EMAIL, role: 'admin' });
-    
-    if (existingAdmin) {
-      logger.info(`Admin user ${ADMIN_EMAIL} exists`);
-      return;
-    }
-
-    // Generate username from email
-    const username = ADMIN_EMAIL.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '_');
-    
-    // Hash password before saving
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, salt);
-    
-    const adminUser = await User.create({
-      name: ADMIN_NAME,
-      username: username,
-      email: ADMIN_EMAIL,
-      password: hashedPassword,
-      role: 'admin',
-      emailVerified: true,
-      status: 'active'
-    });
-
-    logger.info(`Admin user created: ${ADMIN_EMAIL}`);
-    
-    if (NODE_ENV === 'development') {
-      logger.warn(`FIRST-TIME SETUP: Admin credentials - ${ADMIN_EMAIL}:${ADMIN_PASSWORD}`);
-    }
-  } catch (error) {
-    logger.error('Admin user creation failed:', error);
-    throw error;
   }
 };
 

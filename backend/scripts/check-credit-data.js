@@ -19,13 +19,15 @@ const logger = {
 async function connectToDatabase() {
   try {
     // Connect to MongoDB using the same connection string as the app
-    const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://aman:49b1HtpesbsJfZnz@credit-score-dashboard.w2bwj1o.mongodb.net/credit-score-dashboard?retryWrites=true&w=majority&appName=credit-score-dashboard';
+    const MONGODB_URI = process.env.MONGODB_URI;
+    
+    if (!MONGODB_URI) {
+      throw new Error('MONGODB_URI is not defined in environment variables');
+    }
     
     logger.info('Connecting to MongoDB...', { uri: MONGODB_URI.replace(/mongodb\+srv:\/\/([^:]+):[^@]+@/, 'mongodb+srv://$1:*****@') });
     
     const connection = await mongoose.connect(MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
       serverSelectionTimeoutMS: 10000, // 10 seconds
       socketTimeoutMS: 45000, // 45 seconds
     });

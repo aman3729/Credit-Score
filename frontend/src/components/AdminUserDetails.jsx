@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import api from '../../utils/api';
+import { api } from "../lib/api";
 import CreditScoreReport from './CreditScoreReport';
 
 const AdminUserDetails = ({ user, onClose, onUpdate, onDelete }) => {
@@ -180,6 +180,35 @@ const AdminUserDetails = ({ user, onClose, onUpdate, onDelete }) => {
               </div>
             </div>
           </div>
+
+          {/* Lending Decision History */}
+          {user.creditReport?.lendingDecisionHistory && user.creditReport.lendingDecisionHistory.length > 0 && (
+            <div className="mb-6">
+              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Lending Decision History</h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm border">
+                  <thead>
+                    <tr className="bg-gray-100 dark:bg-gray-800">
+                      <th className="px-2 py-1 border">Decision</th>
+                      <th className="px-2 py-1 border">Date</th>
+                      <th className="px-2 py-1 border">Evaluator</th>
+                      <th className="px-2 py-1 border">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {user.creditReport.lendingDecisionHistory.map((entry, idx) => (
+                      <tr key={idx} className="border-b">
+                        <td className="px-2 py-1 border">{entry.decision}</td>
+                        <td className="px-2 py-1 border">{entry.evaluatedAt ? new Date(entry.evaluatedAt).toLocaleString() : ''}</td>
+                        <td className="px-2 py-1 border">{entry.evaluatedBy || ''}</td>
+                        <td className="px-2 py-1 border">{entry.manualNotes || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex justify-end space-x-4">

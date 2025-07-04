@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState, Suspense } from 'react';
-import { Routes, Route, Navigate, useLocation, useNavigate, Outlet } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate, Outlet, useParams } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 // Update Dashboard import
 import { Dashboard } from './components/Dashboard';
@@ -9,9 +9,12 @@ import Register from './components/Register';
 import AdminDashboard from './components/AdminDashboard';
 import EmailVerification from './components/EmailVerification';
 import LenderDashboard from './components/LenderDashboard';
+import PremiumDashboard from './components/PremiumDashboard';
 import { useToast } from './hooks/use-toast';
 import { Toaster } from './components/ui/toaster';
 import { Button } from './components/ui/button';
+import AdminUserDetails from './components/AdminUserDetails';
+import api from './utils/api';
 
 // Protected route component with enhanced role-based access control
 const ProtectedRoute = ({ user, requiredRole, children }) => {
@@ -167,8 +170,16 @@ const App = () => {
   // Handle login
   const handleLogin = useCallback(async (credentials) => {
     try {
-      await login(credentials);
-      navigate('/dashboard');
+      const user = await login(credentials);
+      
+      // Redirect based on user role
+      if (user.role === 'lender') {
+        navigate('/lender');
+      } else if (user.role === 'admin') {
+        navigate('/admin');
+      } else {
+        navigate('/dashboard');
+      }
     } catch (error) {
       toast({
         title: 'Login Failed',
@@ -181,12 +192,21 @@ const App = () => {
   // Handle register (kept for backward compatibility)
   const handleRegister = useCallback(async (userData) => {
     try {
-      await register(userData);
+      const user = await register(userData);
+      
       toast({
         title: 'Registration Successful',
         description: 'Please check your email to verify your account.',
       });
-      navigate('/login');
+      
+      // Redirect based on user role
+      if (user.role === 'lender') {
+        navigate('/lender');
+      } else if (user.role === 'admin') {
+        navigate('/admin');
+      } else {
+        navigate('/dashboard');
+      }
     } catch (error) {
       toast({
         title: 'Registration Failed',
@@ -311,11 +331,23 @@ const App = () => {
                   />
                 } 
               />
+              
+              {/* Premium Dashboard - accessible to premium users */}
+              <Route 
+                path="/premium" 
+                element={
+                  <ProtectedRoute user={user} requiredRole={['premium', 'admin']}>
+                    <PremiumDashboard />
+                  </ProtectedRoute>
+                } 
+              />
             </Route>
 
             {/* Admin routes */}
             <Route element={<ProtectedRoute user={user} requiredRole="admin" />}>
-              <Route path="/admin/*" element={<AdminDashboard />} />
+              <Route path="/admin/*" element={<AdminDashboard darkMode={darkMode} toggleDarkMode={toggleDarkMode} />} />
+              <Route path="/admin/users/:userId" element={<AdminUserDetailsPage />} />
+              <Route path="/admin/credit-reports/:reportId" element={<CreditReportDetailsPage />} />
             </Route>
 
             {/* Lender routes - accessible to both lender and admin roles */}
@@ -323,7 +355,7 @@ const App = () => {
               path="/lender" 
               element={
                 <ProtectedRoute user={user} requiredRole={['lender', 'admin']}>
-                  <LenderDashboard />
+                  <LenderDashboard darkMode={darkMode} toggleDarkMode={toggleDarkMode} />
                 </ProtectedRoute>
               } 
             />
@@ -332,7 +364,7 @@ const App = () => {
               path="/lender/:userId" 
               element={
                 <ProtectedRoute user={user} requiredRole={['lender', 'admin']}>
-                  <LenderDashboard />
+                  <LenderDashboard darkMode={darkMode} toggleDarkMode={toggleDarkMode} />
                 </ProtectedRoute>
               } 
             />
@@ -402,6 +434,41 @@ const App = () => {
       )}
     </div>
   );
+};
+
+// Wrapper for user details
+const AdminUserDetailsPage = () => {
+  const { userId } = useParams();
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        setLoading(true);
+        // Use the api utility for authenticated requests
+        const response = await api.get(`/admin/users/${userId}`);
+        setUser(response.data || response.user || response);
+      } catch (err) {
+        setError('Failed to fetch user details');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchUser();
+  }, [userId]);
+
+  if (loading) return <div className="p-8 text-center">Loading user details...</div>;
+  if (error) return <div className="p-8 text-center text-red-600">{error}</div>;
+  if (!user) return <div className="p-8 text-center">User not found.</div>;
+  return <AdminUserDetails user={user} onClose={() => window.history.back()} />;
+};
+
+// Placeholder for credit report details
+const CreditReportDetailsPage = () => {
+  const { reportId } = useParams();
+  return <div className="p-8 text-center">Credit Report Details for {reportId} (to be implemented)</div>;
 };
 
 // No need for AppWrapper anymore since Router is in main.jsx

@@ -40,41 +40,44 @@ const makeLoanDecision = async (req, res) => {
       });
     }
 
-    // Convert credit data to the format expected by evaluateLendingDecision
+    // Extract scoreData and userData for the lending decision engine
+    const scoreData = {
+      score: creditData.creditScore || creditData.ficoScore || 0,
+      classification: creditData.classification || undefined
+    };
     const userData = {
-      ...creditData.toObject(),
-      totalDebt: creditData.outstandingDebt || 0,
-      monthlyIncome: creditData.monthlyIncome || 0,
-      recentMissedPayments: creditData.latePayments30 || 0,
-      recentDefaults: creditData.latePayments90 || 0
+      recentDefaults: creditData.latePayments90 || 0,
+      consecutiveMissedPayments: creditData.latePayments60 || 0,
+      missedPaymentsLast12: creditData.latePayments30 || 0,
+      recentLoanApplications: creditData.recentLoanApplications || 0,
+      activeLoanCount: creditData.activeLoanCount || 0,
+      onTimeRateLast6Months: creditData.onTimeRateLast6Months || 1,
+      monthsSinceLastDelinquency: creditData.monthsSinceLastDelinquency || 999
+      // ...add any other fields you want to use
     };
 
-    // Use the existing lending decision engine
-    const decision = evaluateLendingDecision(userData);
-    
-    // Determine if approved based on the decision
-    const approved = decision.decision === 'Approve';
-    const maxLoanAmount = creditData.monthlyIncome * 12 * 0.36; // 36% DTI
+    // Use the lending decision engine
+    const decision = evaluateLendingDecision(scoreData, userData);
 
-    // Prepare response
+    // Prepare response using the engine's recommendation
     const response = {
       success: true,
       data: {
-        approved,
-        creditScore: decision.scoreData?.score || 0,
-        dti: (userData.totalDebt / (userData.monthlyIncome * 12)) || 0,
-        maxLoanAmount: parseFloat(maxLoanAmount.toFixed(2)),
-        message: decision.reasons.join('. '),
+        approved: decision.decision === 'Approve',
+        creditScore: scoreData.score,
         decision: decision.decision,
         reasons: decision.reasons,
-        recommendations: decision.recommendations,
-        terms: {
-          amount: parseFloat(loanAmount.toFixed(2)),
-          term: loanTerm,
-          interestRate: parseFloat(interestRate.toFixed(2)),
-          monthlyPayment: calculateMonthlyPayment(loanAmount, loanTerm, interestRate)
-        },
-        scoreData: decision.scoreData,
+        recommendation: decision.recommendation,
+        terms: decision.recommendation ? {
+          amount: decision.recommendation.maxLoanAmount,
+          term: decision.recommendation.termMonths,
+          interestRate: decision.recommendation.interestRate,
+          monthlyPayment: calculateMonthlyPayment(
+            decision.recommendation.maxLoanAmount,
+            decision.recommendation.termMonths,
+            decision.recommendation.interestRate
+          )
+        } : null,
         timestamp: new Date().toISOString()
       }
     };

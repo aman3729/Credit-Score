@@ -28,13 +28,13 @@ const isAuthenticated = () => {
 };
 
 // Login user
-const login = async (email, password) => {
+const login = async (identifier, password) => {
   try {
     console.log('=== AUTH SERVICE LOGIN ===');
-    console.log('Logging in with email:', email);
+    console.log('Logging in with identifier:', identifier);
     
     // The base URL already includes /api/v1, so we just need the endpoint path
-    const response = await api.post('/auth/login', { email, password });
+    const response = await api.post('/auth/login', { identifier, password });
     
     console.log('Login response status:', response.status);
     console.log('Full request URL:', response.config.baseURL + response.config.url); // Debug log
@@ -204,9 +204,63 @@ const authFetch = async (url, options = {}) => {
   }
 };
 
+// Register user
+const register = async (userData) => {
+  try {
+    console.log('=== AUTH SERVICE REGISTER ===');
+    console.log('Registering with data:', { ...userData, password: '[HIDDEN]' });
+    
+    const response = await api.post('/auth/register', userData);
+    
+    console.log('Register response status:', response.status);
+    console.log('Register response data:', response.data);
+
+    // Extract token and user data from the response
+    const { token, user: responseUserData } = response.data;
+    
+    // Store the token if it exists in the response
+    if (token) {
+      console.log('Storing token in localStorage');
+      setToken(token);
+    } else {
+      console.warn('No token received in register response');
+    }
+
+    // Ensure user data is properly formatted
+    const formattedUser = responseUserData ? {
+      id: responseUserData._id || responseUserData.id,
+      email: responseUserData.email,
+      name: responseUserData.name || responseUserData.username,
+      role: responseUserData.role || 'user',
+      ...responseUserData
+    } : {};
+
+    console.log('Formatted user data:', formattedUser);
+
+    // Return both the user data and token
+    return {
+      user: formattedUser,
+      token: token || null
+    };
+  } catch (error) {
+    console.error('Register error:', error);
+    const errorMessage = error.response?.data?.message || 
+                       error.response?.data?.error?.message || 
+                       error.message || 
+                       'An error occurred during registration. Please try again.';
+    
+    // Create a new error with a more descriptive message
+    const authError = new Error(errorMessage);
+    authError.response = error.response;
+    
+    throw authError;
+  }
+};
+
 export {
   login,
   logout,
+  register,
   verifyToken,
   isAuthenticated,
   getToken,

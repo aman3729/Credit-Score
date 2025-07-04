@@ -68,6 +68,13 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
                 Dashboard
               </NavLink>
               
+              {/* Premium Dashboard Link */}
+              {(currentUser?.premium?.isPremium || currentUser?.role === 'admin') && (
+                <NavLink to="/premium" activePath="/premium">
+                  Premium Dashboard
+                </NavLink>
+              )}
+              
               {currentUser?.role === 'admin' && (
                 <NavLink to="/admin" activePath="/admin">
                   Admin
@@ -168,6 +175,13 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
             <NavLink to="/dashboard" activePath="/dashboard">
               Dashboard
             </NavLink>
+            
+            {/* Premium Dashboard Link */}
+            {(currentUser?.premium?.isPremium || currentUser?.role === 'admin') && (
+              <NavLink to="/premium" activePath="/premium">
+                Premium Dashboard
+              </NavLink>
+            )}
             
             {currentUser?.role === 'admin' && (
               <NavLink to="/admin" activePath="/admin">

@@ -1,44 +1,60 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+// src/components/LenderDashboard.jsx
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Loader2, User, CreditCard, AlertCircle, CheckCircle2, XCircle, Info, ChevronDown, Edit, Save, AlertTriangle } from 'lucide-react';
+import { 
+  Search, 
+  User, 
+  CreditCard, 
+  AlertCircle, 
+  CheckCircle2, 
+  XCircle, 
+  Info, 
+  ChevronDown, 
+  Edit, 
+  Save, 
+  AlertTriangle,
+  BarChart4,
+  Bell,
+  FileText,
+  Mail,
+  Clock,
+  TrendingUp,
+  Filter,
+  RefreshCw,
+  Loader2
+} from 'lucide-react';
+import axios from 'axios';
+import AdminBatchUpload from './AdminBatchUpload';
+import { Modal } from 'antd';
+import EnhancedRegister from './EnhancedRegister';
 
 // UI Components
 import { Input } from './ui/input';
 import { Button } from './ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from './ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Badge } from './ui/badge';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from './ui/dialog';
-import { ScrollArea } from './ui/scroll-area';
 import { Separator } from './ui/separator';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { Label } from './ui/label';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { useToast } from '../hooks/use-toast';
 import { useAuth } from "../contexts/AuthContext";
 import { api } from "../lib/api";
 
-// Status badge colors
-const statusColors = {
-  active: 'bg-green-100 text-green-800',
-  inactive: 'bg-gray-100 text-gray-800',
-  pending: 'bg-yellow-100 text-yellow-800',
-  rejected: 'bg-red-100 text-red-800',
-};
+// Reasoning Components
+import CreditInsights from './CreditInsights';
+import ImprovementTipsEngine from './ImprovementTipsEngine';
 
-const LenderDashboard = () => {
+const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   
   // State
   const [searchQuery, setSearchQuery] = useState('');
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
   const [selectedUser, setSelectedUser] = useState(null);
   const [userCreditData, setUserCreditData] = useState(null);
   const [loadingCreditData, setLoadingCreditData] = useState(false);
@@ -51,31 +67,32 @@ const LenderDashboard = () => {
     term: '',
     interestRate: ''
   });
+  const [activeTab, setActiveTab] = useState('overview');
+  const [dashboardMetrics, setDashboardMetrics] = useState({
+    approvedLoans: 0,
+    pendingLoans: 0,
+    rejectedLoans: 0,
+    avgDecisionTime: '0m',
+    riskBreakdown: { low: 0, medium: 0, high: 0 }
+  });
+  const [alerts, setAlerts] = useState([]);
+  const [recentDecisions, setRecentDecisions] = useState([]);
+  const [loanOffer, setLoanOffer] = useState(null);
+  const [loadingLoanOffer, setLoadingLoanOffer] = useState(false);
+  const [sendingOffer, setSendingOffer] = useState(false);
+  const [decliningOffer, setDecliningOffer] = useState(false);
+  const [editingIncome, setEditingIncome] = useState(false);
+  const [newIncome, setNewIncome] = useState('');
+  const [recalcLoading, setRecalcLoading] = useState(false);
+  const [decisionData, setDecisionData] = useState(null);
+  const [decisionLoading, setDecisionLoading] = useState(false);
+  const [decisionError, setDecisionError] = useState(null);
+  const [showBatchUpload, setShowBatchUpload] = useState(false);
+  const [batchResults, setBatchResults] = useState(null);
+  const [showRegister, setShowRegister] = useState(false);
+  
   const searchTimeoutRef = useRef(null);
-
-  // Decision badge colors and icons
-  const decisionConfig = {
-    Approve: {
-      color: 'bg-green-100 text-green-800 border-green-200',
-      icon: CheckCircle2,
-      label: 'Approved'
-    },
-    Review: {
-      color: 'bg-yellow-100 text-yellow-800 border-yellow-200',
-      icon: AlertCircle,
-      label: 'Needs Review'
-    },
-    Reject: {
-      color: 'bg-red-100 text-red-800 border-red-200',
-      icon: XCircle,
-      label: 'Rejected'
-    },
-    default: {
-      color: 'bg-gray-100 text-gray-800 border-gray-200',
-      icon: Info,
-      label: 'Pending'
-    }
-  };
+  const intervalRef = useRef(null);
 
   // Search users with debounce
   const searchUsers = useCallback(async (query = '') => {
@@ -86,85 +103,11 @@ const LenderDashboard = () => {
 
     try {
       setLoading(true);
-      setError(null);
-      
-      // Using admin users endpoint with lender role
-      const response = await api.get(`/admin/users?search=${encodeURIComponent(query)}`);
+      const response = await api.get(`/lenders/search-borrowers?search=${encodeURIComponent(query)}`);
       const usersList = Array.isArray(response.data.data) ? response.data.data : [];
-      
-      // Fetch credit data for each user to get lending decisions
-      const usersWithCreditData = await Promise.all(
-        usersList.map(async (user) => {
-          try {
-            console.log(`Fetching credit data for user: ${user._id}`);
-            const creditResponse = await api.get(`/users/${user._id}/credit-data`);
-            
-            // Log the complete response for debugging
-            console.log(`Credit data for user ${user._id}:`, creditResponse.data);
-            
-            // Handle both response structures: { data: {...} } and direct data
-            const responseData = creditResponse.data.data || creditResponse.data;
-            
-            // Extract credit score and lending decision
-            const creditScore = responseData.currentScore || 
-                              (responseData.creditScores && responseData.creditScores[0]?.score) || 
-                              'N/A';
-                              
-            // Get lending decision or create a default one based on score
-            let lendingDecision = responseData.lendingDecision;
-            
-            if (!lendingDecision) {
-              // Create a default lending decision based on score if none exists
-              const score = Number(creditScore);
-              if (!isNaN(score)) {
-                lendingDecision = {
-                  decision: score >= 700 ? 'Approve' : score >= 600 ? 'Review' : 'Reject',
-                  reasons: [
-                    score >= 700 ? 'Good credit score' : 
-                    score >= 600 ? 'Moderate credit score' : 'Low credit score'
-                  ],
-                  recommendations: [
-                    score >= 700 ? 'Eligible for best rates' :
-                    score >= 600 ? 'Review terms carefully' : 'Consider secured options'
-                  ]
-                };
-              } else {
-                // Fallback if we can't determine a score
-                lendingDecision = {
-                  decision: 'Review',
-                  reasons: ['Complete credit assessment required'],
-                  recommendations: ['Review application manually']
-                };
-              }
-            }
-            
-            return {
-              ...user,
-              creditScore,
-              lendingDecision
-            };
-            
-          } catch (creditErr) {
-            console.error(`Error fetching credit data for user ${user._id}:`, creditErr);
-            return {
-              ...user,
-              creditScore: user.creditScore || 'N/A', // Keep existing score if any
-              lendingDecision: {
-                decision: 'Review',
-                reasons: ['Error loading credit data'],
-                recommendations: ['Check user details']
-              }
-            };
-          }
-        })
-      );
-      
-      setUsers(usersWithCreditData);
-      
+      setUsers(usersList);
     } catch (err) {
       console.error('Error searching users:', err);
-      setError('Failed to search users');
-      
       if (err.response?.status === 401 || err.response?.status === 403) {
         toast({
           title: 'Session expired',
@@ -190,198 +133,83 @@ const LenderDashboard = () => {
     const query = e.target.value;
     setSearchQuery(query);
     
-    // Clear previous timeout
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     
-    // Set new timeout
     searchTimeoutRef.current = setTimeout(() => {
       searchUsers(query);
     }, 500);
   };
 
-  // Fetch user credit data with detailed error handling and logging
+  // Fetch user credit data
   const fetchUserCreditData = async (userId) => {
-    if (!userId) {
-      const errorMsg = 'No user ID provided to fetchUserCreditData';
-      console.error(errorMsg);
-      setCreditDataError(errorMsg);
-      return;
-    }
+    if (!userId) return;
 
-    const startTime = Date.now();
-    console.log(`[${new Date().toISOString()}] Starting credit data fetch for user:`, userId);
-    
     try {
       setLoadingCreditData(true);
       setCreditDataError(null);
       
-      // Log the exact URL being called
-      const apiUrl = `/users/${userId}/credit-data`;
-      const timestamp = new Date().getTime(); // Cache buster
-      const urlWithCacheBuster = `${apiUrl}?_=${timestamp}`;
-      
-      console.log(`[${new Date().toISOString()}] API Request:`, {
-        method: 'GET',
-        url: urlWithCacheBuster,
-        userId,
-        timestamp: new Date().toISOString()
-      });
-      
-      // Add cache-control headers to prevent caching
-      const response = await api.get(urlWithCacheBuster, {
-        headers: {
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'Expires': '0'
-        }
-      });
-      const requestDuration = Date.now() - startTime;
-      
-      // Log complete response for debugging
-      console.log(`[${new Date().toISOString()}] Complete API Response (${requestDuration}ms):`, {
-        status: response.status,
-        statusText: response.statusText,
-        config: response.config,
-        hasData: !!response.data,
-        responseData: response.data || 'No data in response'
-      });
-      
-      if (!response.data) {
-        const errorMsg = 'No data in response';
-        console.error(errorMsg, { response });
-        throw new Error(errorMsg);
-      }
-      
-      // The backend returns data in response.data.data
+      const response = await api.get(`/user/${userId}/credit-data`);
       const responseData = response.data.data || response.data;
       
-      // Log the structure of the response data
-      console.log(`[${new Date().toISOString()}] Response data structure:`, {
-        responseKeys: Object.keys(response.data),
-        dataKeys: responseData ? Object.keys(responseData) : 'No data',
-        hasUser: !!(responseData?.user),
-        hasCurrentScore: responseData?.currentScore !== undefined,
-        hasCreditScores: Array.isArray(responseData?.creditScores) && responseData.creditScores.length > 0,
-        hasCreditReport: !!responseData?.creditReport,
-        hasLendingDecision: !!responseData?.lendingDecision
-      });
+      if (!responseData) throw new Error('No data received from server');
       
-      if (!responseData) {
-        throw new Error('No data received from server');
+      // Always use the latest lending decision, falling back to the most recent in lendingDecisionHistory
+      let latestLendingDecision = responseData.lendingDecision;
+      if (
+        (!latestLendingDecision || Object.keys(latestLendingDecision).length === 0 || latestLendingDecision.decision === undefined)
+        && Array.isArray(responseData.lendingDecisionHistory)
+        && responseData.lendingDecisionHistory.length > 0
+      ) {
+        latestLendingDecision = responseData.lendingDecisionHistory[responseData.lendingDecisionHistory.length - 1];
       }
-      
-      // Format the data for the frontend
-      const formattedData = {
+      setUserCreditData({
+        userId,
         ...responseData,
-        // Map the backend fields to the frontend expected structure
         currentScore: responseData.currentScore,
-        creditReport: responseData.creditReport || responseData.creditScores?.[0] || null,
-        lendingDecision: responseData.lendingDecision || {
-          decision: responseData.currentScore >= 700 ? 'Approve' : 'Review',
-          reasons: responseData.currentScore >= 700 
-            ? ['Good credit score'] 
-            : ['Insufficient credit history'],
-          recommendations: responseData.currentScore >= 700
-            ? ['Eligible for premium rates']
-            : ['Consider adding more credit history']
-        },
-        // Include raw response for debugging
-        _rawResponse: response.data,
-        _responseStatus: response.status
-      };
-      
-      console.log('Formatted credit data:', {
-        ...formattedData,
-        // Truncate large objects for logging
-        creditScores: Array.isArray(formattedData.creditScores) 
-          ? `[${formattedData.creditScores.length} items]` 
-          : 'No credit scores',
-        creditReport: formattedData.creditReport ? '[CreditReport]' : 'No credit report',
-        _rawResponse: '[Raw response]'
+        lendingDecision: latestLendingDecision,
       });
-      
-      setUserCreditData(formattedData);
-      
-      // Log a warning if we have credit scores but no current score
-      if (Array.isArray(responseData.creditScores) && responseData.creditScores.length > 0 && !responseData.currentScore) {
-        console.warn('Credit scores exist but no current score found');
-      }
-      
     } catch (err) {
-      const errorDetails = {
-        message: err.message,
-        name: err.name,
-        stack: err.stack,
-        response: {
-          status: err.response?.status,
-          statusText: err.response?.statusText,
-          data: err.response?.data,
-          headers: err.response?.headers
-        },
-        config: {
-          url: err.config?.url,
-          method: err.config?.method,
-          headers: err.config?.headers,
-          params: err.config?.params
-        },
-        timestamp: new Date().toISOString(),
-        duration: Date.now() - startTime
-      };
-      
-      console.error('[ERROR] Error fetching credit data:', errorDetails);
-      
-      const errorMessage = err.response?.data?.error || 
-                         err.message || 
-                         'Failed to load credit data';
-      
+      const errorMessage = err.response?.data?.error || err.message || 'Failed to load credit data';
       setCreditDataError(errorMessage);
-      
       toast({
         title: 'Error',
         description: errorMessage,
         variant: 'destructive',
       });
     } finally {
-      console.log(`[${new Date().toISOString()}] Finished credit data fetch for user ${userId} in ${Date.now() - startTime}ms`);
       setLoadingCreditData(false);
     }
   };
 
-  // Handle user selection with detailed logging
-  const handleUserSelect = (user) => {
-    console.log('User selected:', {
-      userId: user._id,
-      userName: user.name,
-      userEmail: user.email
-    });
-    
-    // Reset previous state
+  // Handle user selection
+  const handleUserSelect = async (user) => {
     setUserCreditData(null);
     setCreditDataError(null);
-    
-    // Set the selected user which will open the modal
+    setLoanOffer(null);
     setSelectedUser(user);
-    
-    // Fetch the credit data for this user
-    console.log('Initiating credit data fetch for user:', user._id);
-    fetchUserCreditData(user._id);
+    setLoadingLoanOffer(true);
+
+    try {
+      const offerRes = await api.get(`/lenders/lending-decision/${user._id}`);
+      if (offerRes.data?.data) setLoanOffer(offerRes.data.data);
+      fetchUserCreditData(user._id);
+    } catch (err) {
+      toast({
+        title: 'Error',
+        description: err.response?.data?.error || err.message || 'Failed to fetch data',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoadingLoanOffer(false);
+    }
+
+    setActiveTab('borrower');
   };
 
-  // Clear search
-  const clearSearch = () => {
-    setSearchQuery('');
-    setUsers([]);
+  // Close borrower view
+  const closeBorrowerView = useCallback(() => {
     setSelectedUser(null);
     setUserCreditData(null);
-  };
-
-  // Close credit data modal
-  const closeCreditDataModal = useCallback(() => {
-    setSelectedUser(null);
-    setUserCreditData(null);
-    setCreditDataError('');
     setIsEditingDecision(false);
     setManualDecision({
       decision: '',
@@ -390,20 +218,264 @@ const LenderDashboard = () => {
       term: '',
       interestRate: ''
     });
+    setActiveTab('overview');
   }, []);
+
+  // Fetch dashboard metrics
+  const fetchDashboardMetrics = useCallback(async () => {
+    try {
+      const response = await api.get('/lenders/recent-decisions?limit=100');
+      const decisions = response.data.data?.decisions || [];
+      const approvedCount = decisions.filter(d => d.lendingDecision?.decision === 'Approve').length;
+      const pendingCount = decisions.filter(d => d.lendingDecision?.decision === 'Review').length;
+      const rejectedCount = decisions.filter(d => d.lendingDecision?.decision === 'Reject').length;
+      
+      setDashboardMetrics({
+        approvedLoans: approvedCount,
+        pendingLoans: pendingCount,
+        rejectedLoans: rejectedCount,
+        avgDecisionTime: '2.5m',
+        riskBreakdown: { low: 35, medium: 45, high: 20 }
+      });
+    } catch (error) {
+      setDashboardMetrics({
+        approvedLoans: 0,
+        pendingLoans: 0,
+        rejectedLoans: 0,
+        avgDecisionTime: '0m',
+        riskBreakdown: { low: 0, medium: 0, high: 0 }
+      });
+    }
+  }, []);
+
+  // Fetch recent decisions
+  const fetchRecentDecisions = useCallback(async () => {
+    try {
+      const response = await api.get('/lenders/recent-decisions?limit=5');
+      setRecentDecisions(response.data.data?.decisions || []);
+    } catch (error) {
+      setRecentDecisions([]);
+    }
+  }, []);
+
+  // Fetch alerts
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const decisions = await fetchRecentDecisions();
+      const alerts = [];
+      
+      const highRiskCount = decisions.filter(d => 
+        (d.creditScore?.fico?.score || 0) < 670
+      ).length;
+      
+      if (highRiskCount > 2) {
+        alerts.push({
+          type: 'critical',
+          title: 'High Risk Applications',
+          description: `${highRiskCount} high-risk applications in recent decisions`,
+          time: '2 hours ago'
+        });
+      }
+      
+      setAlerts(alerts);
+    } catch (error) {
+      setAlerts([]);
+    }
+  }, [fetchRecentDecisions]);
+
+  // Save manual decision
+  const saveManualDecision = async () => {
+    if (!userCreditData?.userId) {
+      toast({
+        title: 'Error',
+        description: 'No user selected for decision',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    try {
+      await api.post(`/lenders/save-decision/${userCreditData.userId}`, {
+        ...manualDecision,
+        isManual: true,
+        reasons: userCreditData?.lendingDecision?.reasons || [],
+        recommendations: userCreditData?.lendingDecision?.recommendations || [],
+      });
+      
+      setUserCreditData(prev => ({
+        ...prev,
+        lendingDecision: {
+          ...prev.lendingDecision,
+          decision: manualDecision.decision,
+          isManual: true,
+          manualNotes: manualDecision.notes,
+          loanDetails: {
+            amount: manualDecision.amount,
+            term: manualDecision.term,
+            interestRate: manualDecision.interestRate
+          }
+        }
+      }));
+      
+      setIsEditingDecision(false);
+      toast({
+        title: 'Success',
+        description: 'Lending decision saved',
+        variant: 'default',
+      });
+      fetchRecentDecisions();
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error.response?.data?.error || 'Failed to save decision',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  // Start editing the decision
+  const startEditingDecision = () => {
+    setManualDecision({
+      decision: userCreditData?.lendingDecision?.decision || 'Review',
+      notes: userCreditData?.lendingDecision?.manualNotes || '',
+      amount: userCreditData?.lendingDecision?.loanDetails?.amount || '',
+      term: userCreditData?.lendingDecision?.loanDetails?.term || '',
+      interestRate: userCreditData?.lendingDecision?.loanDetails?.interestRate || ''
+    });
+    setIsEditingDecision(true);
+  };
+
+  // Handler to submit new income and recalculate
+  const submitNewIncome = async () => {
+    if (!selectedUser) return;
+    setRecalcLoading(true);
+    try {
+      const res = await api.post(`/lenders/lending-decision/${selectedUser._id}/recalculate`, {
+        monthlyIncome: Number(newIncome)
+      });
+      if (res.data?.offer) {
+        setLoanOffer(res.data.offer);
+        toast({ title: 'Loan offer recalculated', description: `New offer based on income $${newIncome}` });
+      }
+    } catch (err) {
+      toast({ 
+        title: 'Error', 
+        description: err.response?.data?.error || err.message, 
+        variant: 'destructive' 
+      });
+    } finally {
+      setRecalcLoading(false);
+      setEditingIncome(false);
+    }
+  };
+
+  // Add sendOffer and declineOffer handlers
+  const sendOffer = async () => {
+    if (!selectedUser || !loanOffer) return;
+    setSendingOffer(true);
+    try {
+      await api.post(`/lenders/save-decision/${selectedUser._id}`, {
+        decision: 'Approve',
+        notes: 'Offer sent to borrower',
+        loanDetails: {
+          amount: loanOffer.approvedAmount,
+          term: loanOffer.termMonths,
+          interestRate: loanOffer.interestRate
+        },
+        isManual: false
+      });
+      toast({ 
+        title: 'Offer sent', 
+        description: 'Loan offer sent to borrower.' 
+      });
+    } catch (err) {
+      toast({ 
+        title: 'Error', 
+        description: err.response?.data?.error || err.message, 
+        variant: 'destructive' 
+      });
+    } finally {
+      setSendingOffer(false);
+    }
+  };
+
+  const declineOffer = async () => {
+    if (!selectedUser || !loanOffer) return;
+    setDecliningOffer(true);
+    try {
+      await api.post(`/lenders/save-decision/${selectedUser._id}`, {
+        decision: 'Reject',
+        notes: 'Offer declined by lender',
+        isManual: false
+      });
+      toast({ 
+        title: 'Offer declined', 
+        description: 'Loan offer declined.' 
+      });
+    } catch (err) {
+      toast({ 
+        title: 'Error', 
+        description: err.response?.data?.error || err.message, 
+        variant: 'destructive' 
+      });
+    } finally {
+      setDecliningOffer(false);
+    }
+  };
+
+  // New function to fetch decision by phone number
+  const fetchDecisionByPhone = async (phone) => {
+    setDecisionLoading(true);
+    setDecisionError(null);
+    setDecisionData(null);
+    try {
+      const res = await axios.get(`/api/creditScore/decision/${encodeURIComponent(phone)}`);
+      setDecisionData(res.data);
+    } catch (err) {
+      setDecisionError(err.response?.data?.error || err.message || 'Failed to fetch decision');
+    } finally {
+      setDecisionLoading(false);
+    }
+  };
+
+  // Add a search bar for phone number
+  const handlePhoneSearch = async (e) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    fetchDecisionByPhone(searchQuery.trim());
+  };
 
   // Cleanup on unmount
   useEffect(() => {
+    const currentTimeout = searchTimeoutRef.current;
+    const currentInterval = intervalRef.current;
+    
     return () => {
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-      }
+      if (currentTimeout) clearTimeout(currentTimeout);
+      if (currentInterval) clearInterval(currentInterval);
     };
   }, []);
 
+  // Fetch initial data
+  useEffect(() => {
+    fetchDashboardMetrics();
+    fetchRecentDecisions();
+    fetchAlerts();
+    
+    const interval = setInterval(() => {
+      fetchDashboardMetrics();
+      fetchRecentDecisions();
+      fetchAlerts();
+    }, 30000);
+    
+    intervalRef.current = interval;
+    
+    return () => clearInterval(interval);
+  }, [fetchDashboardMetrics, fetchRecentDecisions, fetchAlerts]);
+
   // Render decision badge
   const renderDecisionBadge = (decision, size = 'default') => {
-    const baseClasses = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium';
+    const baseClasses = 'inline-flex items-center rounded-full text-xs font-medium';
     const sizeClasses = size === 'large' ? 'px-3 py-1 text-sm' : 'px-2.5 py-0.5 text-xs';
     const iconSize = size === 'large' ? 'h-4 w-4' : 'h-3 w-3';
     
@@ -429,452 +501,727 @@ const LenderDashboard = () => {
 
   // Handle manual decision change
   const handleManualDecision = (field, value) => {
-    setManualDecision(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setManualDecision(prev => ({ ...prev, [field]: value }));
   };
 
-  // Save manual decision
-  const saveManualDecision = () => {
-    // In a real app, you would save this to your backend
-    console.log('Saving manual decision:', manualDecision);
-    
-    // Update the local state to reflect the manual decision
-    setUserCreditData(prev => ({
-      ...prev,
-      lendingDecision: {
-        ...prev.lendingDecision,
-        decision: manualDecision.decision,
-        isManual: true,
-        manualNotes: manualDecision.notes,
-        loanDetails: {
-          amount: manualDecision.amount,
-          term: manualDecision.term,
-          interestRate: manualDecision.interestRate
+  // Render dashboard metrics
+  const renderMetrics = () => (
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      {[
+        { 
+          title: 'Approved Loans', 
+          value: dashboardMetrics.approvedLoans, 
+          icon: CheckCircle2, 
+          color: 'green' 
+        },
+        { 
+          title: 'Pending Loans', 
+          value: dashboardMetrics.pendingLoans, 
+          icon: Clock, 
+          color: 'yellow' 
+        },
+        { 
+          title: 'Rejected Loans', 
+          value: dashboardMetrics.rejectedLoans, 
+          icon: XCircle, 
+          color: 'red' 
+        },
+        { 
+          title: 'Avg. Decision Time', 
+          value: dashboardMetrics.avgDecisionTime, 
+          icon: BarChart4, 
+          color: 'blue' 
         }
-      }
-    }));
-    
-    // Exit edit mode
-    setIsEditingDecision(false);
-    
-    // Show success message
-    toast.success('Lending decision saved successfully');
-  };
+      ].map((metric, index) => (
+        <Card key={index} className={`border-l-4 border-${metric.color}-500`}>
+          <CardContent className="p-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <p className="text-sm text-muted-foreground">{metric.title}</p>
+                <h3 className="text-2xl font-bold">{metric.value}</h3>
+              </div>
+              <div className={`bg-${metric.color}-100 p-3 rounded-full`}>
+                <metric.icon className={`h-6 w-6 text-${metric.color}-600`} />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
 
-  // Start editing the decision
-  const startEditingDecision = () => {
-    setManualDecision({
-      decision: userCreditData?.lendingDecision?.decision || 'review',
-      notes: userCreditData?.lendingDecision?.manualNotes || '',
-      amount: userCreditData?.lendingDecision?.loanDetails?.amount || '',
-      term: userCreditData?.lendingDecision?.loanDetails?.term || '',
-      interestRate: userCreditData?.lendingDecision?.loanDetails?.interestRate || ''
-    });
-    setIsEditingDecision(true);
+  // Render borrower snapshot
+  const renderBorrowerSnapshot = () => (
+    <Card className="mb-6">
+      <CardHeader className="pb-3">
+        <div className="flex justify-between items-center">
+          <CardTitle>Borrower Snapshot</CardTitle>
+          <Button variant="outline" onClick={closeBorrowerView}>
+            Back to Dashboard
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {loadingCreditData ? (
+          <div className="flex justify-center items-center py-8">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        ) : userCreditData ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {/* Left Column - User Info */}
+            <div className="md:col-span-1">
+              <div className="flex items-center gap-4 mb-6">
+                <div className="bg-gray-100 p-3 rounded-full">
+                  <User className="h-8 w-8 text-gray-600" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold">{selectedUser?.name || 'N/A'}</h3>
+                  <p className="text-muted-foreground">{selectedUser?.email || 'N/A'}</p>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <h4 className="text-sm text-muted-foreground">Credit Score</h4>
+                  <div className="flex items-baseline gap-2 mt-1">
+                    <span className="text-3xl font-extrabold text-blue-700">{userCreditData.creditScore?.fico?.score ?? userCreditData.currentScore ?? 'N/A'}</span>
+                    <Badge variant="outline">
+                      {(() => {
+                        const score = userCreditData.creditScore?.fico?.score ?? userCreditData.currentScore;
+                        if (score >= 740) return 'Excellent';
+                        if (score >= 670) return 'Good';
+                        if (score >= 580) return 'Fair';
+                        if (typeof score === 'number') return 'Poor';
+                        return 'N/A';
+                      })()}
+                    </Badge>
+                  </div>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm text-muted-foreground">Risk Assessment</h4>
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {userCreditData.lendingDecision?.riskFlags?.highDTI && (
+                      <Badge variant="destructive">High DTI</Badge>
+                    )}
+                    {userCreditData.lendingDecision?.riskFlags?.hasDefaults && (
+                      <Badge variant="destructive">Defaults</Badge>
+                    )}
+                    {userCreditData.lendingDecision?.riskFlags?.hasMissedPayments && (
+                      <Badge variant="warning">Missed Payments</Badge>
+                    )}
+                    {!userCreditData.lendingDecision?.riskFlags?.highDTI && 
+                     !userCreditData.lendingDecision?.riskFlags?.hasDefaults && 
+                     !userCreditData.lendingDecision?.riskFlags?.hasMissedPayments && (
+                      <Badge variant="default">Low Risk</Badge>
+                    )}
+                  </div>
+                </div>
+                
+                <div>
+                  <h4 className="text-sm text-muted-foreground">Lending Decision</h4>
+                  <div className="mt-1">
+                    {renderDecisionBadge(userCreditData.lendingDecision?.decision || 'Review', 'large')}
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Right Column - Financial Metrics */}
+            <div className="md:col-span-2">
+              <div className="grid grid-cols-2 gap-4">
+                {[
+                  { 
+                    title: 'Monthly Income', 
+                    value: userCreditData.monthlyIncome !== undefined && userCreditData.monthlyIncome !== null ? `$${userCreditData.monthlyIncome.toLocaleString()}` : 'N/A',
+                    editable: true
+                  },
+                  { 
+                    title: 'Total Debt', 
+                    value: userCreditData.totalDebt !== undefined && userCreditData.totalDebt !== null ? `$${userCreditData.totalDebt.toLocaleString()}` : 'N/A'
+                  },
+                  { 
+                    title: 'DTI Ratio', 
+                    value: userCreditData.lendingDecision?.debtToIncomeRatio !== undefined && userCreditData.lendingDecision?.debtToIncomeRatio !== null
+                      ? `${(userCreditData.lendingDecision.debtToIncomeRatio * 100).toFixed(1)}%` 
+                      : 'N/A' 
+                  },
+                  { 
+                    title: 'Max Loan Amount', 
+                    value: userCreditData.lendingDecision?.maxLoanAmount !== undefined && userCreditData.lendingDecision?.maxLoanAmount !== null
+                      ? `$${userCreditData.lendingDecision.maxLoanAmount.toLocaleString()}` : 'N/A',
+                    highlight: true
+                  },
+                  { 
+                    title: 'Suggested Rate', 
+                    value: userCreditData.lendingDecision?.suggestedInterestRate !== undefined && userCreditData.lendingDecision?.suggestedInterestRate !== null
+                      ? userCreditData.lendingDecision.suggestedInterestRate : 'N/A',
+                    highlight: true
+                  },
+                  { 
+                    title: 'Missed Payments', 
+                    value: userCreditData.recentMissedPayments !== undefined && userCreditData.recentMissedPayments !== null ? userCreditData.recentMissedPayments : 0 
+                  },
+                  { 
+                    title: 'Recent Defaults', 
+                    value: userCreditData.recentDefaults !== undefined && userCreditData.recentDefaults !== null ? userCreditData.recentDefaults : 0 
+                  },
+                  { 
+                    title: 'Credit Utilization', 
+                    value: userCreditData.creditUtilization?.overall !== undefined && userCreditData.creditUtilization?.overall !== null
+                      ? `${(userCreditData.creditUtilization.overall * 100).toFixed(1)}%` 
+                      : 'N/A' 
+                  },
+                  { 
+                    title: 'Credit Mix',
+                    value: userCreditData.creditMix !== undefined && userCreditData.creditMix !== null
+                      ? `${(userCreditData.creditMix * 100).toFixed(1)}%`
+                      : 'N/A'
+                  },
+                  {
+                    title: 'Credit Age (months)',
+                    value: userCreditData.creditAgeMonths !== undefined && userCreditData.creditAgeMonths !== null
+                      ? userCreditData.creditAgeMonths
+                      : 'N/A'
+                  },
+                  {
+                    title: 'Total Accounts',
+                    value: userCreditData.totalAccounts !== undefined && userCreditData.totalAccounts !== null
+                      ? userCreditData.totalAccounts
+                      : 'N/A'
+                  },
+                  {
+                    title: 'Open Accounts',
+                    value: userCreditData.openAccounts !== undefined && userCreditData.openAccounts !== null
+                      ? userCreditData.openAccounts
+                      : 'N/A'
+                  }
+                ].map((metric, index) => (
+                  <div 
+                    key={index} 
+                    className={`p-4 rounded-lg ${metric.highlight ? 'bg-blue-50' : 'bg-gray-50'}`}
+                  >
+                    <h4 className="text-sm text-muted-foreground">{metric.title}</h4>
+                    <div className="flex justify-between items-center mt-1">
+                      <p className={`text-lg font-semibold ${metric.highlight ? 'text-blue-600' : ''}`}>
+                        {metric.value}
+                      </p>
+                      {metric.editable && (
+                        <Button 
+                          variant="ghost" 
+                          size="icon"
+                          onClick={startEditingIncome}
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-center py-8 text-muted-foreground">
+            No credit data available
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+
+  // Render borrower list
+  const renderBorrowerList = () => (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Borrower</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Credit Score</TableHead>
+          <TableHead>Risk Level</TableHead>
+          <TableHead>Decision</TableHead>
+          <TableHead>Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {users.map((user) => (
+          <TableRow key={user._id}>
+            <TableCell>
+              <div className="font-medium">{user.name || 'N/A'}</div>
+              <div className="text-sm text-muted-foreground">{user.email || 'N/A'}</div>
+            </TableCell>
+            <TableCell>
+              <Badge variant="outline">
+                {user.status || 'inactive'}
+              </Badge>
+            </TableCell>
+            <TableCell>
+              <div className="flex items-center">
+                <CreditCard className="h-4 w-4 mr-2 text-muted-foreground" />
+                {user.creditScore || 'N/A'}
+              </div>
+            </TableCell>
+            <TableCell>
+              <Badge variant={
+                user.lendingDecision?.riskFlags?.highDTI || 
+                user.lendingDecision?.riskFlags?.hasDefaults ? "destructive" : 
+                user.lendingDecision?.riskFlags?.hasMissedPayments ? "warning" : "default"
+              }>
+                {user.lendingDecision?.riskFlags?.highDTI || 
+                 user.lendingDecision?.riskFlags?.hasDefaults ? "High Risk" : 
+                 user.lendingDecision?.riskFlags?.hasMissedPayments ? "Medium Risk" : "Low Risk"}
+              </Badge>
+            </TableCell>
+            <TableCell>
+              <div className="flex items-center">
+                {renderDecisionBadge(user.lendingDecision?.decision || 'Review')}
+              </div>
+            </TableCell>
+            <TableCell>
+              <Button size="sm" onClick={() => handleUserSelect(user)}>Review</Button>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+
+  const startEditingIncome = () => setEditingIncome(true);
+
+  const handleBatchUploadOpen = () => setShowBatchUpload(true);
+  const handleBatchUploadClose = () => setShowBatchUpload(false);
+  const handleBatchUploadComplete = (results) => {
+    setBatchResults(results);
+    setShowBatchUpload(false);
   };
 
   return (
-    <div className="container mx-auto p-4">
-      {/* Search Bar */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow mb-6">
-        <div className="flex items-center">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
-            <Input
-              type="text"
-              placeholder="Search users by name or email..."
-              className="pl-10 w-full"
-              value={searchQuery}
-              onChange={handleSearch}
-            />
-          </div>
-          <Button 
-            variant="outline" 
-            className="ml-2"
-            onClick={clearSearch}
-            disabled={!searchQuery}
-          >
-            Clear
-          </Button>
+    <div className="container mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-950 dark:to-blue-950 min-h-screen rounded-xl shadow-lg transition-colors duration-300">
+      <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Lender Dashboard</h1>
+          <p className="text-muted-foreground dark:text-gray-400">Monitor applications and make lending decisions</p>
         </div>
+        {/* Dark mode toggle button */}
+        <button
+          onClick={toggleDarkMode}
+          className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200 self-end"
+          aria-label="Toggle dark mode"
+        >
+          {darkMode ? (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-800" fill="currentColor" viewBox="0 0 24 24"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+          )}
+        </button>
       </div>
 
-      {/* Search Results */}
-      {loading ? (
-        <div className="flex justify-center items-center p-8 bg-white dark:bg-gray-800 rounded-lg shadow">
-          <Loader2 className="h-8 w-8 animate-spin text-gray-500 mr-2" />
-          <span className="text-gray-600 dark:text-gray-300">Searching users...</span>
-        </div>
-      ) : error ? (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-          <p className="text-red-700 dark:text-red-300">{error}</p>
-        </div>
-      ) : users.length > 0 ? (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle>User Search Results</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Credit Score</TableHead>
-                  <TableHead>Lending Decision</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((user) => (
-                  <TableRow 
-                    key={user._id} 
-                    className="hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
-                    onClick={() => handleUserSelect(user)}
-                  >
-                    <TableCell className="font-medium">
-                      <div className="flex items-center">
-                        <User className="h-4 w-4 mr-2 text-gray-500" />
-                        {user.name || 'N/A'}
+      {/* Search Panel */}
+      <Card className="mb-8 transition-shadow hover:shadow-2xl duration-200 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700">
+        <CardHeader className="bg-muted p-4">
+          <div className="flex flex-col md:flex-row gap-4 items-center">
+            <div className="w-full">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Search users by username or phone number..."
+                  className="pl-10 w-full"
+                  value={searchQuery}
+                  onChange={handleSearch}
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 w-full md:w-auto">
+              <Button 
+                variant="outline" 
+                onClick={() => setSearchQuery('')}
+                disabled={!searchQuery}
+                className="transition-colors hover:bg-blue-100"
+              >
+                Clear
+              </Button>
+              <Button>
+                <Search className="h-4 w-4 mr-2" />
+                Search
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          {users.length > 0 ? (
+            <div className="overflow-x-auto">
+              {renderBorrowerList()}
+            </div>
+          ) : (
+            <div className="p-8 text-center text-muted-foreground">
+              {loading ? (
+                <Loader2 className="h-6 w-6 animate-spin mx-auto" />
+              ) : (
+                'No search results. Start typing to search for borrowers.'
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Tabs Navigation */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
+        <TabsList className="grid grid-cols-3">
+          <TabsTrigger value="overview">
+            <BarChart4 className="h-4 w-4 mr-2" />
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="borrower" disabled={!selectedUser}>
+            <User className="h-4 w-4 mr-2" />
+            Borrower
+          </TabsTrigger>
+          <TabsTrigger value="activity">
+            <TrendingUp className="h-4 w-4 mr-2" />
+            Activity
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {/* Dashboard Content */}
+      {activeTab === 'overview' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            {renderMetrics()}
+            
+            {/* Risk Breakdown */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Risk Portfolio Breakdown</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {[
+                    { level: 'Low Risk', value: dashboardMetrics.riskBreakdown.low, color: 'green' },
+                    { level: 'Medium Risk', value: dashboardMetrics.riskBreakdown.medium, color: 'yellow' },
+                    { level: 'High Risk', value: dashboardMetrics.riskBreakdown.high, color: 'red' }
+                  ].map((risk, index) => (
+                    <div key={index}>
+                      <div className="flex justify-between mb-1">
+                        <span className={`text-sm font-medium text-${risk.color}-600`}>
+                          {risk.level}
+                        </span>
+                        <span className="text-sm font-medium">{risk.value}%</span>
                       </div>
-                    </TableCell>
-                    <TableCell>{user.email || 'N/A'}</TableCell>
-                    <TableCell>
-                      <Badge 
-                        variant="outline" 
-                        className={statusColors[user.status] || 'bg-gray-100 text-gray-800'}
-                      >
-                        {user.status || 'inactive'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center">
-                        <CreditCard className="h-4 w-4 mr-2 text-gray-500" />
-                        {user.creditScore || 'N/A'}
+                      <div className="w-full bg-gray-200 rounded-full h-2.5">
+                        <div 
+                          className={`bg-${risk.color}-600 h-2.5 rounded-full`} 
+                          style={{ width: `${risk.value}%` }}
+                        ></div>
                       </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center">
-                        {user.lendingDecision ? (
-                          <div className="flex items-center">
-                            {renderDecisionBadge(user.lendingDecision.decision || 'Review')}
-                            {user.lendingDecision.decision === 'Review' && user.lendingDecision.reasons?.[0] && (
-                              <span className="ml-1 text-xs text-yellow-600">
-                                ({user.lendingDecision.reasons[0]})
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-gray-400">Loading...</span>
-                        )}
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+          
+          <div className="space-y-6">
+            {/* Alerts */}
+            <Card>
+              <CardHeader>
+                <div className="flex justify-between items-center">
+                  <CardTitle>Alerts & Monitoring</CardTitle>
+                  <Button variant="ghost" size="icon">
+                    <Bell className="h-5 w-5" />
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {alerts.length > 0 ? alerts.map((alert, index) => (
+                    <div key={index} className="flex items-start gap-3">
+                      <div className={`p-2 rounded-full mt-1 ${alert.type === 'critical' ? 'bg-red-100' : 'bg-yellow-100'}`}>
+                        <AlertTriangle className={`h-4 w-4 ${alert.type === 'critical' ? 'text-red-600' : 'text-yellow-600'}`} />
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      ) : searchQuery ? (
-        <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-lg shadow">
-          <p className="text-gray-500">No users found matching "{searchQuery}"</p>
+                      <div>
+                        <h4 className="font-medium">{alert.title}</h4>
+                        <p className="text-sm text-muted-foreground">{alert.description}</p>
+                        <p className="text-xs text-muted-foreground mt-1">{alert.time}</p>
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="text-center py-4 text-muted-foreground">
+                      No alerts at this time
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+            
+            {/* Recent Decisions */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Recent Decisions</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {recentDecisions.length > 0 ? recentDecisions.map((decision, index) => (
+                    <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
+                      <div>
+                        <h4 className="font-medium">{decision.user?.name || 'Unknown User'}</h4>
+                        <p className="text-sm text-muted-foreground">
+                          {decision.user?.email || 'No email'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {renderDecisionBadge(decision.lendingDecision?.decision || 'Review')}
+                      </div>
+                    </div>
+                  )) : (
+                    <div className="text-center py-4 text-muted-foreground">
+                      No recent decisions
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
-      ) : (
-        <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-lg shadow">
-          <p className="text-gray-500">Enter a name or email to search for users</p>
+      )}
+      
+      {activeTab === 'borrower' && selectedUser && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            {renderBorrowerSnapshot()}
+            
+            {/* Credit Insights */}
+            {userCreditData && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Credit Insights</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <CreditInsights 
+                    creditData={userCreditData}
+                  />
+                </CardContent>
+              </Card>
+            )}
+            
+            {/* Improvement Tips */}
+            {userCreditData && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Improvement Recommendations</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ImprovementTipsEngine 
+                    creditData={userCreditData}
+                  />
+                </CardContent>
+              </Card>
+            )}
+          </div>
+          
+          <div className="space-y-6">
+            {/* Lending Decision */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Lending Decision</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  <div className="flex items-center gap-3 mb-2">
+                    {userCreditData?.lendingDecision?.decision === 'Approve' && (
+                      <span className="text-2xl">✅</span>
+                    )}
+                    {userCreditData?.lendingDecision?.decision === 'Review' && (
+                      <span className="text-2xl">🟠</span>
+                    )}
+                    {userCreditData?.lendingDecision?.decision === 'Reject' && (
+                      <span className="text-2xl">❌</span>
+                    )}
+                    <span className="text-xl font-bold">
+                      {userCreditData?.lendingDecision?.decision === 'Approve' ? 'Loan Approval Summary' :
+                       userCreditData?.lendingDecision?.decision === 'Review' ? 'Loan Under Review' :
+                       userCreditData?.lendingDecision?.decision === 'Reject' ? 'Loan Rejected' :
+                       'No Lending Decision'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div><span className="text-muted-foreground">Decision</span><br/>{userCreditData?.lendingDecision?.decision ?? 'N/A'}</div>
+                    <div><span className="text-muted-foreground">Score</span><br/>{userCreditData?.lendingDecision?.score ?? 'N/A'}</div>
+                    <div><span className="text-muted-foreground">Classification</span><br/>{userCreditData?.lendingDecision?.classification ?? 'N/A'}</div>
+                    <div><span className="text-muted-foreground">Risk Tier</span><br/>{userCreditData?.lendingDecision?.riskTier ?? 'N/A'}{userCreditData?.lendingDecision?.riskTierLabel ? ` (${userCreditData.lendingDecision.riskTierLabel})` : ''}</div>
+                    <div><span className="text-muted-foreground">Default Risk Estimate</span><br/>{userCreditData?.lendingDecision?.defaultRiskEstimate ?? 'N/A'}</div>
+                    <div><span className="text-muted-foreground">Engine Version</span><br/>{userCreditData?.lendingDecision?.engineVersion ?? 'N/A'}</div>
+                    <div><span className="text-muted-foreground">DTI</span><br/>{userCreditData?.lendingDecision?.dti ?? 'N/A'}</div>
+                    <div><span className="text-muted-foreground">Timestamp</span><br/>{userCreditData?.lendingDecision?.timestamp ? new Date(userCreditData.lendingDecision.timestamp).toLocaleString() : 'N/A'}</div>
+                    <div><span className="text-muted-foreground">Rejection Code</span><br/>{userCreditData?.lendingDecision?.rejectionCode ?? 'N/A'}</div>
+                  </div>
+                  {/* Scoring Details */}
+                  <div>
+                    <h4 className="font-medium mb-1">Scoring Details</h4>
+                    <div className="text-sm text-muted-foreground">
+                      <b>Recession Mode:</b> {userCreditData?.lendingDecision?.scoringDetails?.recessionMode ? 'Yes' : 'No'}<br/>
+                      <b>AI Enabled:</b> {userCreditData?.lendingDecision?.scoringDetails?.aiEnabled ? 'Yes' : 'No'}
+                    </div>
+                  </div>
+                  {/* Customer Profile */}
+                  <div>
+                    <h4 className="font-medium mb-1">Customer Profile</h4>
+                    <div className="text-sm text-muted-foreground">
+                      <b>Employment Status:</b> {userCreditData?.lendingDecision?.customerProfile?.employmentStatus ?? 'N/A'}<br/>
+                      <b>Active Loans:</b> {userCreditData?.lendingDecision?.customerProfile?.activeLoans ?? 'N/A'}<br/>
+                      <b>Last Delinquency:</b> {userCreditData?.lendingDecision?.customerProfile?.lastDelinquency ?? 'N/A'}
+                    </div>
+                  </div>
+                  {/* Reasons */}
+                  <div>
+                    <h4 className="font-medium mb-1">Reasons</h4>
+                    {userCreditData?.lendingDecision?.reasons && userCreditData.lendingDecision.reasons.length > 0 ? (
+                      <ul className="list-disc list-inside text-sm text-muted-foreground">
+                        {userCreditData.lendingDecision.reasons.map((reason, idx) => (
+                          <li key={idx}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="text-muted-foreground">N/A</div>
+                    )}
+                  </div>
+                  {/* Risk Flags */}
+                  <div>
+                    <h4 className="font-medium mb-1 flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-yellow-600" /> Risk Flags
+                    </h4>
+                    {userCreditData?.lendingDecision?.riskFlags && userCreditData.lendingDecision.riskFlags.length > 0 ? (
+                      <ul className="list-disc list-inside text-sm text-muted-foreground">
+                        {userCreditData.lendingDecision.riskFlags.map((flag, idx) => (
+                          <li key={idx}>{flag}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="text-muted-foreground">N/A</div>
+                    )}
+                  </div>
+                  {/* Loan Offer */}
+                  <div>
+                    <h4 className="font-medium mb-1">Loan Offer</h4>
+                    {userCreditData?.lendingDecision?.offer ? (
+                      <div style={{ lineHeight: 2 }}>
+                        <b>Max Loan Amount:</b> {userCreditData.lendingDecision.offer.maxAmount ?? 'N/A'}<br/>
+                        <b>Available Terms:</b> {userCreditData.lendingDecision.offer.availableTerms?.join(', ') ?? 'N/A'}<br/>
+                        <b>Interest Rate:</b> {userCreditData.lendingDecision.offer.interestRate ?? 'N/A'}%<br/>
+                        <b>Sample Payment (for {userCreditData.lendingDecision.offer.sampleTerm} mo):</b> {userCreditData.lendingDecision.offer.samplePayment ?? 'N/A'}<br/>
+                        <b>Collateral Required:</b> {userCreditData.lendingDecision.offer.collateralRequired ? 'Yes' : 'No'}<br/>
+                        {/* Pricing Model */}
+                        <b>Pricing Model:</b><br/>
+                        &nbsp;&nbsp;Base Rate: {userCreditData.lendingDecision.offer.pricingModel?.baseRate ?? 'N/A'}%<br/>
+                        &nbsp;&nbsp;DTI Adj.: {userCreditData.lendingDecision.offer.pricingModel?.adjustments?.dtiAdjustment ?? 'N/A'}%<br/>
+                        &nbsp;&nbsp;Recession Adj.: {userCreditData.lendingDecision.offer.pricingModel?.adjustments?.recessionAdjustment ?? 'N/A'}%<br/>
+                        &nbsp;&nbsp;Payment Adj.: {userCreditData.lendingDecision.offer.pricingModel?.adjustments?.paymentAdjustment ?? 'N/A'}%<br/>
+                        &nbsp;&nbsp;Final Rate: {userCreditData.lendingDecision.offer.pricingModel?.finalRate ?? 'N/A'}%
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground">No loan offer available for this user.</div>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            
+            {/* Loan Offer */}
+            {userCreditData?.lendingDecision && (
+              <Card style={{ marginBottom: 24 }}>
+                <CardHeader>
+                  <CardTitle>Loan Offer</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {userCreditData.lendingDecision.recommendation || userCreditData.lendingDecision.maxLoanAmount ? (
+                    <div style={{ lineHeight: 2 }}>
+                      <b>Max Loan Amount:</b> {userCreditData.lendingDecision.recommendation?.maxLoanAmount ?? userCreditData.lendingDecision.maxLoanAmount ?? 'N/A'}<br/>
+                      <b>Interest Rate:</b> {userCreditData.lendingDecision.recommendation?.interestRate ?? userCreditData.lendingDecision.interestRate ?? 'N/A'}<br/>
+                      <b>Term (months):</b> {userCreditData.lendingDecision.recommendation?.termMonths ?? userCreditData.lendingDecision.termMonths ?? 'N/A'}<br/>
+                      <b>Monthly Payment:</b> {userCreditData.lendingDecision.recommendation?.monthlyPayment ?? userCreditData.lendingDecision.monthlyPayment ?? 'N/A'}<br/>
+                    </div>
+                  ) : (
+                    <div className="text-muted-foreground">No loan offer available for this user.</div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Credit Data Modal */}
-      <Dialog open={!!selectedUser} onOpenChange={!loadingCreditData ? closeCreditDataModal : undefined}>
-        <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
-          {selectedUser && (
-            <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  <User className="h-5 w-5" />
-                  {selectedUser.name || 'User Details'}
-                </DialogTitle>
-                <DialogDescription>
-                  {selectedUser.email}
-                </DialogDescription>
-              </DialogHeader>
-              
-              <ScrollArea className="flex-1 pr-4 -mr-4">
-                {loadingCreditData ? (
-                  <div className="flex items-center justify-center h-40">
-                    <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
-                  </div>
-                ) : creditDataError ? (
-                  <div className="space-y-4 p-4">
-                    <div className="text-red-500 text-center pb-4">
-                      <AlertCircle className="h-8 w-8 mx-auto mb-2" />
-                      <p className="font-medium">Failed to load credit data</p>
-                      <p className="text-sm text-red-400 mt-1">{creditDataError}</p>
-                    </div>
-                    
-                    <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg border border-red-200 dark:border-red-800">
-                      <h4 className="font-medium text-sm text-red-700 dark:text-red-300 mb-2">Debug Information:</h4>
-                      <div className="text-xs space-y-1">
-                        <div><span className="font-semibold">User ID:</span> {selectedUser?._id || 'N/A'}</div>
-                        <div><span className="font-semibold">API Status:</span> {userCreditData?._responseStatus || 'No response'}</div>
-                        <div><span className="font-semibold">Has Data:</span> {JSON.stringify(!!userCreditData)}</div>
-                        <div><span className="font-semibold">Data Keys:</span> {userCreditData ? Object.keys(userCreditData).join(', ') : 'no data'}</div>
-                      </div>
-                      
-                      <div className="mt-4">
-                        <h5 className="font-medium text-xs text-red-700 dark:text-red-300 mb-1">Raw API Response:</h5>
-                        <div className="bg-white dark:bg-gray-900 p-2 rounded border border-gray-200 dark:border-gray-700 max-h-40 overflow-auto">
-                          <pre className="text-xs">
-                            {JSON.stringify({
-                              status: userCreditData?._responseStatus,
-                              data: userCreditData?._rawResponse || userCreditData,
-                              timestamp: new Date().toISOString()
-                            }, null, 2)}
-                          </pre>
-                        </div>
-                      </div>
-                      
-                      {userCreditData && (
-                        <details className="mt-3">
-                          <summary className="text-xs text-blue-600 dark:text-blue-400 cursor-pointer">
-                            Show full credit data object
-                          </summary>
-                          <pre className="mt-2 p-2 bg-white dark:bg-gray-900 text-xs rounded overflow-auto max-h-60">
-                            {JSON.stringify(userCreditData, (key, value) => {
-                              // Skip large objects in the preview
-                              if (key === 'creditReport' && value && typeof value === 'object') {
-                                return `[CreditReport ${Object.keys(value).join(', ')}]`;
-                              }
-                              return value;
-                            }, 2)}
-                          </pre>
-                        </details>
-                      )}
-                    </div>
-                  </div>
-                ) : userCreditData?.lendingDecision ? (
-                  <div className="space-y-6">
-                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-lg font-medium flex items-center gap-2">
-                          Lending Decision
-                          {userCreditData.lendingDecision.isManual && (
-                            <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
-                              Manual Override
-                            </span>
-                          )}
-                        </h3>
-                        <div className="flex items-center gap-2">
-                          {renderDecisionBadge(userCreditData.lendingDecision.decision, 'large')}
-                          {!isEditingDecision && (
-                            <Button 
-                              variant="outline" 
-                              size="sm" 
-                              onClick={startEditingDecision}
-                              className="ml-2"
-                            >
-                              <Edit className="h-3.5 w-3.5 mr-1.5" />
-                              Edit
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                      
-                      {isEditingDecision ? (
-                        <div className="space-y-4">
-                          <div className="space-y-2">
-                            <h4 className="text-sm font-medium">Decision</h4>
-                            <div className="grid grid-cols-3 gap-2">
-                              <Button
-                                variant={manualDecision.decision === 'Approve' ? 'default' : 'outline'}
-                                onClick={() => handleManualDecision('decision', 'Approve')}
-                                className="flex-1"
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                variant={manualDecision.decision === 'Review' ? 'default' : 'outline'}
-                                onClick={() => handleManualDecision('decision', 'Review')}
-                                className="flex-1"
-                              >
-                                Review
-                              </Button>
-                              <Button
-                                variant={manualDecision.decision === 'Reject' ? 'default' : 'outline'}
-                                onClick={() => handleManualDecision('decision', 'Reject')}
-                                className="flex-1"
-                              >
-                                Reject
-                              </Button>
-                            </div>
-                          </div>
-                          
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium">Loan Amount ($)</label>
-                              <Input
-                                type="number"
-                                value={manualDecision.amount}
-                                onChange={(e) => handleManualDecision('amount', e.target.value)}
-                                placeholder="e.g. 10000"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium">Term (months)</label>
-                              <Input
-                                type="number"
-                                value={manualDecision.term}
-                                onChange={(e) => handleManualDecision('term', e.target.value)}
-                                placeholder="e.g. 36"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium">Interest Rate (%)</label>
-                              <Input
-                                type="number"
-                                step="0.01"
-                                value={manualDecision.interestRate}
-                                onChange={(e) => handleManualDecision('interestRate', e.target.value)}
-                                placeholder="e.g. 5.5"
-                              />
-                            </div>
-                            <div className="space-y-2">
-                              <label className="text-sm font-medium">Notes</label>
-                              <Input
-                                value={manualDecision.notes}
-                                onChange={(e) => handleManualDecision('notes', e.target.value)}
-                                placeholder="Add notes about this decision"
-                              />
-                            </div>
-                          </div>
-                          
-                          <div className="flex justify-end gap-2 pt-2">
-                            <Button 
-                              variant="outline" 
-                              onClick={() => setIsEditingDecision(false)}
-                            >
-                              Cancel
-                            </Button>
-                            <Button 
-                              onClick={saveManualDecision}
-                              disabled={!manualDecision.decision}
-                            >
-                              <Save className="h-4 w-4 mr-2" />
-                              Save Decision
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          <div className="space-y-2">
-                            <h4 className="text-sm font-medium text-gray-500">Decision Details</h4>
-                            <div className="grid grid-cols-2 gap-4">
-                              <div>
-                                <p className="text-xs text-gray-500">Loan Amount</p>
-                                <p className="text-sm font-medium">
-                                  {userCreditData.lendingDecision.loanDetails?.amount 
-                                    ? `$${Number(userCreditData.lendingDecision.loanDetails.amount).toLocaleString()}` 
-                                    : 'Not specified'}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Term</p>
-                                <p className="text-sm font-medium">
-                                  {userCreditData.lendingDecision.loanDetails?.term 
-                                    ? `${userCreditData.lendingDecision.loanDetails.term} months` 
-                                    : 'Not specified'}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Interest Rate</p>
-                                <p className="text-sm font-medium">
-                                  {userCreditData.lendingDecision.loanDetails?.interestRate 
-                                    ? `${userCreditData.lendingDecision.loanDetails.interestRate}%` 
-                                    : 'Not specified'}
-                                </p>
-                              </div>
-                            </div>
-                            
-                            {userCreditData.lendingDecision.manualNotes && (
-                              <div className="mt-2">
-                                <p className="text-xs text-gray-500">Notes</p>
-                                <p className="text-sm mt-1 bg-gray-50 dark:bg-gray-700 p-2 rounded">
-                                  {userCreditData.lendingDecision.manualNotes}
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                          
-                          <Separator />
-                          
-                          <div>
-                            <h4 className="text-sm font-medium text-gray-500 mb-2">Reasons</h4>
-                            <ul className="space-y-2">
-                              {userCreditData.lendingDecision.reasons?.map((reason, i) => (
-                                <li key={i} className="flex items-start gap-2">
-                                  <Info className="h-4 w-4 mt-0.5 text-gray-400 flex-shrink-0" />
-                                  <span className="text-sm">{reason}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                          
-                          <Separator />
-                          
-                          <div>
-                            <h4 className="text-sm font-medium text-gray-500 mb-2">Recommendations</h4>
-                            <ul className="space-y-2">
-                              {userCreditData.lendingDecision.recommendations?.map((rec, i) => (
-                                <li key={i} className="flex items-start gap-2">
-                                  <CheckCircle2 className="h-4 w-4 mt-0.5 text-green-500 flex-shrink-0" />
-                                  <span className="text-sm">{rec}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    
-                    {userCreditData.currentScore && (
-                      <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border">
-                        <h3 className="text-lg font-medium mb-4">Credit Information</h3>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <p className="text-sm text-gray-500">Current Score</p>
-                            <p className="text-xl font-semibold">{userCreditData.currentScore}</p>
-                          </div>
-                          <div>
-                            <p className="text-sm text-gray-500">Score History</p>
-                            <p className="text-sm">{userCreditData.creditScores?.length || 0} records</p>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500">
-                    No credit data available
-                  </div>
-                )}
-              </ScrollArea>
-              
-              <div className="flex justify-end pt-4 border-t">
-                <Button 
-                  variant="outline" 
-                  onClick={closeCreditDataModal}
-                  disabled={loadingCreditData}
-                >
-                  Close
-                </Button>
-              </div>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Phone Search */}
+      <form onSubmit={handlePhoneSearch} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <Input
+          placeholder="Search by phone number..."
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          style={{ maxWidth: 240 }}
+        />
+        <Button type="submit" disabled={decisionLoading}>Search</Button>
+      </form>
+      {decisionLoading && <div>Loading decision...</div>}
+      {decisionError && <div style={{ color: 'red' }}>{decisionError}</div>}
+      {decisionData && (
+        <Card style={{ marginBottom: 24 }}>
+          <CardHeader>
+            <CardTitle>API Debug: Full Decision Data</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}>{JSON.stringify(decisionData, null, 2)}</pre>
+            <div style={{ marginTop: 16 }}>
+              <b>User:</b> {decisionData.user}<br/>
+              <b>Score:</b> {decisionData.score}<br/>
+              <b>Decision:</b> {decisionData.decision}<br/>
+              {decisionData.loanOffer && (
+                <>
+                  <b>Loan Offer:</b><br/>
+                  &nbsp;&nbsp;Amount: {decisionData.loanOffer.amount}<br/>
+                  &nbsp;&nbsp;Rate: {decisionData.loanOffer.rate}<br/>
+                  &nbsp;&nbsp;Term: {decisionData.loanOffer.term}<br/>
+                  &nbsp;&nbsp;Monthly Payment: {decisionData.loanOffer.monthlyPayment}<br/>
+                </>
+              )}
+              <b>Risk Flags:</b> {decisionData.riskFlags?.length ? decisionData.riskFlags.join(', ') : 'None'}<br/>
+              <b>Insight:</b> {decisionData.insight}<br/>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Button onClick={handleBatchUploadOpen} style={{ marginBottom: 16 }}>Batch Upload Borrowers</Button>
+      <Modal
+        open={showBatchUpload}
+        onCancel={handleBatchUploadClose}
+        footer={null}
+        title="Batch Upload Borrowers"
+        width={700}
+        destroyOnHidden
+      >
+        <AdminBatchUpload onClose={handleBatchUploadClose} onUploadComplete={handleBatchUploadComplete} />
+      </Modal>
+      {batchResults && (
+        <Card style={{ marginBottom: 24 }}>
+          <CardHeader>
+            <CardTitle>Batch Upload Results</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(batchResults, null, 2)}</pre>
+          </CardContent>
+        </Card>
+      )}
+
+      <Button onClick={() => setShowRegister(true)} style={{ marginBottom: 16 }}>Register New User</Button>
+      <Modal
+        open={showRegister}
+        onCancel={() => setShowRegister(false)}
+        footer={null}
+        title="Register New User"
+        width={600}
+        destroyOnHidden
+      >
+        <EnhancedRegister onSuccess={() => setShowRegister(false)} onClose={() => setShowRegister(false)} isAdmin={true} />
+      </Modal>
     </div>
   );
 };

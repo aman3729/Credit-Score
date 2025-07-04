@@ -41,12 +41,17 @@ const creditReportSchema = new mongoose.Schema({
     }]
   },
   // Add fields that were being set in uploadRoutes.js
-  paymentHistory: { type: Number, min: 0, max: 100 },
-  creditUtilization: { type: Number, min: 0, max: 100 },
+  // paymentHistory: { type: Number, min: 0, max: 100 },
+  creditUtilization: {
+    overall: Number, // Percentage
+    byAccount: [{
+      accountId: String,
+      utilization: Number
+    }]
+  },
   // Renamed to avoid conflict with virtual field
   creditAgeMonths: { type: Number, min: 0, default: 0 },
   creditMix: { type: Number, min: 0, max: 100 },
-  inquiries: { type: Number, min: 0 },
   totalAccounts: { type: Number, default: 0 },
   openAccounts: { type: Number, default: 0 },
   totalDebt: { type: Number, default: 0 },
@@ -91,13 +96,6 @@ const creditReportSchema = new mongoose.Schema({
     },
     lastReported: Date
   }],
-  creditUtilization: {
-    overall: Number, // Percentage
-    byAccount: [{
-      accountId: String,
-      utilization: Number
-    }]
-  },
   inquiries: [{
     lender: String,
     date: Date,
@@ -163,6 +161,19 @@ const creditReportSchema = new mongoose.Schema({
     monthlyDebtPayments: Number,
     lastCalculated: Date
   },
+  lendingDecisionHistory: [{
+    decision: String,
+    reasons: [String],
+    recommendations: [String],
+    isManual: Boolean,
+    manualNotes: String,
+    loanDetails: Object,
+    evaluatedAt: Date,
+    evaluatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    maxLoanAmount: Number,
+    suggestedInterestRate: Number,
+    debtToIncomeRatio: Number
+  }],
   lastUpdated: {
     type: Date,
     default: Date.now

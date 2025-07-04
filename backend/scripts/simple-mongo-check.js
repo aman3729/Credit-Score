@@ -9,7 +9,12 @@ const __dirname = dirname(__filename);
 dotenv.config({ path: `${__dirname}/../../.env` });
 
 // Connection URI
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://aman:vpd6dbDAq3EigvwQ@credit-score-dashboard.w2bwj1o.mongodb.net/credit-score-dashboard?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI is not defined in environment variables');
+  process.exit(1);
+}
 
 // Simple logger
 const log = (message, data) => {

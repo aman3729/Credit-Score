@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import User from '../models/User.js';
 
 // Load environment variables first
 const __filename = fileURLToPath(import.meta.url);
@@ -16,80 +17,58 @@ console.log('Environment variables loaded:');
 console.log('- NODE_ENV:', process.env.NODE_ENV);
 console.log('- MONGODB_URI:', process.env.MONGODB_URI ? 'Set' : 'Not set');
 
-// Connect to MongoDB
 const connectDB = async () => {
   try {
-    if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI is not defined in environment variables');
-    }
-    
-    console.log('Connecting to MongoDB...');
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log('MongoDB Connected Successfully');
-    
-    // Get the default connection
-    const db = mongoose.connection.db;
-    
-    // List all collections in the database
-    const collections = await db.listCollections().toArray();
-    console.log('\nCollections in database:');
-    console.table(collections.map(c => ({ name: c.name })));
-    
-    return db;
+    const conn = await mongoose.connect(process.env.MONGODB_URI);
+    console.log(`MongoDB Connected: ${conn.connection.host}`);
   } catch (error) {
-    console.error('MongoDB connection error:', error.message);
-    console.error('Connection URI:', process.env.MONGODB_URI);
+    console.error('Error connecting to MongoDB:', error);
     process.exit(1);
   }
 };
 
-// List all users
-const listUsers = async (db) => {
+const listUsers = async () => {
   try {
-    console.log('\nFetching users...');
+    await connectDB();
     
-    // First try to get the users collection directly
-    const collections = await db.listCollections({ name: 'users' }).toArray();
+    // Find all users
+    const users = await User.find({}).select('_id email name role premium.isPremium');
     
-    if (collections.length === 0) {
-      console.log('No users collection found in the database.');
-      return;
-    }
-    
-    // Get users collection
-    const usersCollection = db.collection('users');
-    const users = await usersCollection.find({}).toArray();
+    console.log(`\n=== All Users in Database ===`);
+    console.log(`Total users: ${users.length}`);
     
     if (users.length === 0) {
-      console.log('No users found in the users collection.');
+      console.log('No users found in database');
       return;
     }
     
-    console.log('\nUsers in database:');
-    console.table(users.map(user => ({
-      _id: user._id,
-      email: user.email,
-      username: user.username,
-      role: user.role,
-      emailVerified: user.emailVerified,
-      createdAt: user.createdAt
-    })));
+    users.forEach((user, index) => {
+      console.log(`\n${index + 1}. User:`);
+      console.log(`   ID: ${user._id}`);
+      console.log(`   Email: ${user.email}`);
+      console.log(`   Name: ${user.name}`);
+      console.log(`   Role: ${user.role}`);
+      console.log(`   Premium: ${user.premium?.isPremium || false}`);
+    });
+    
+    // Show the admin user specifically
+    const adminUser = users.find(u => u.email === 'admin@creditdashboard.com');
+    if (adminUser) {
+      console.log(`\n=== Admin User Details ===`);
+      console.log(`ID: ${adminUser._id}`);
+      console.log(`Email: ${adminUser.email}`);
+      console.log(`Role: ${adminUser.role}`);
+      console.log(`Premium: ${adminUser.premium?.isPremium || false}`);
+    } else {
+      console.log(`\n❌ Admin user not found!`);
+    }
     
   } catch (error) {
     console.error('Error listing users:', error);
+  } finally {
+    await mongoose.disconnect();
+    console.log('Database connection closed');
   }
 };
 
-// Run the script
-(async () => {
-  try {
-    const db = await connectDB();
-    await listUsers(db);
-  } catch (error) {
-    console.error('Script failed:', error);
-  } finally {
-    await mongoose.disconnect();
-    console.log('\nMongoDB Disconnected');
-    process.exit(0);
-  }
-})();
+listUsers();
