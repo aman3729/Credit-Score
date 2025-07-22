@@ -6,6 +6,16 @@ import jwt from 'jsonwebtoken';
 import { getRolePermissions, ROLE_VALUES } from '../constants/roles.js';
 
 const userSchema = new mongoose.Schema({
+  bankId: {
+    type: String,
+    required: [true, 'Bank selection is required'],
+    enum: [
+      'CBE', 'DBE', 'AWASH', 'DASHEN', 'ABYSSINIA', 'WEGAGEN', 'NIB', 'HIBRET', 'LION', 'COOP',
+      'ZEMEN', 'OROMIA', 'BUNNA', 'BERHAN', 'ABAY', 'ADDIS', 'DEBUB', 'ENAT', 'GADAA', 'HIJRA',
+      'SHABELLE', 'SIINQEE', 'TSEHAY', 'AMHARA', 'AHADU', 'GOH', 'AMAN'
+    ],
+    index: true
+  },
   name: {
     type: String,
     required: [true, 'Please provide your name'],
@@ -34,6 +44,7 @@ const userSchema = new mongoose.Schema({
     minlength: [8, 'Password must be at least 8 characters long'],
     select: false
   },
+  passwordChangedAt: Date,
   role: {
     type: String,
     enum: ROLE_VALUES,
@@ -214,6 +225,12 @@ const userSchema = new mongoose.Schema({
     ref: 'CreditScore',
     default: null
   },
+  latestScore: {
+    type: Number,
+    min: 300,
+    max: 850,
+    default: null
+  },
   creditScoreLastUpdated: {
     type: Date,
     default: null
@@ -271,7 +288,9 @@ const userSchema = new mongoose.Schema({
       type: Boolean,
       default: false
     },
-    consentDate: Date
+    consentDate: Date,
+    consentGivenAt: { type: Date },
+    consentExpiresAt: { type: Date }
   },
   phoneNumber: {
     type: String,
@@ -318,6 +337,11 @@ const userSchema = new mongoose.Schema({
 userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
 
+  // If not a new user, set passwordChangedAt
+  if (!this.isNew) {
+    this.passwordChangedAt = Date.now() - 1000; // Subtract 1s to ensure token iat < changedAt
+  }
+
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -330,44 +354,40 @@ userSchema.pre('save', async function (next) {
 // Compare password method
 userSchema.methods.matchPassword = async function (enteredPassword) {
   try {
-    console.log('=== PASSWORD COMPARISON DEBUG ===');
-    console.log('Entered password length:', enteredPassword?.length || 0);
-    console.log('Stored password hash exists:', !!this.password);
-    console.log('Stored password hash length:', this.password?.length || 0);
-    
+    // Debug logs removed for production security
     if (!enteredPassword) {
-      console.error('No password provided for comparison');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('No password provided for comparison');
+      }
       return false;
     }
-    
     if (!this.password) {
-      console.error('No hashed password found for user');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('No hashed password found for user');
+      }
       return false;
     }
-    
-    // Ensure both passwords are strings
     const enteredPasswordStr = String(enteredPassword);
     const storedPasswordHash = String(this.password);
-    
-    // Check if the stored password is already hashed
     const isHash = /^\$2[aby]?\$\d{1,2}\$[./0-9A-Za-z]{53}$/.test(storedPasswordHash);
-    
     if (!isHash) {
-      console.error('Stored password is not a valid bcrypt hash');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Stored password is not a valid bcrypt hash');
+      }
       return false;
     }
-    
     const isMatch = await bcrypt.compare(enteredPasswordStr, storedPasswordHash);
-    console.log('Password comparison result:', isMatch);
     return isMatch;
   } catch (error) {
-    console.error('Error in matchPassword:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      code: error.code,
-      name: error.name
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.error('Error in matchPassword:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        code: error.code,
+        name: error.name
+      });
+    }
     throw error;
   }
 };
@@ -376,14 +396,22 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 userSchema.methods.comparePassword = async function(enteredPassword) {
   try {
     if (!enteredPassword) {
+      if (process.env.NODE_ENV === 'development') {
+        console.error('No password provided for comparison');
+      }
       throw new Error('No password provided for comparison');
     }
     if (!this.password) {
+      if (process.env.NODE_ENV === 'development') {
+        console.error('No hashed password found for this user');
+      }
       throw new Error('No hashed password found for this user');
     }
     return await this.matchPassword(enteredPassword);
   } catch (error) {
-    console.error('Error in comparePassword:', error);
+    if (process.env.NODE_ENV === 'development') {
+      console.error('Error in comparePassword:', error);
+    }
     throw error;
   }
 };
@@ -391,44 +419,40 @@ userSchema.methods.comparePassword = async function(enteredPassword) {
 // correctPassword method (used by auth controller)
 userSchema.methods.correctPassword = async function(candidatePassword, userPassword) {
   try {
-    console.log('=== PASSWORD COMPARISON DEBUG ===');
-    console.log('Entered password length:', candidatePassword?.length || 0);
-    console.log('Stored password hash exists:', !!userPassword);
-    console.log('Stored password hash length:', userPassword?.length || 0);
-    
+    // Debug logs removed for production security
     if (!candidatePassword) {
-      console.error('No password provided for comparison');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('No password provided for comparison');
+      }
       return false;
     }
-    
     if (!userPassword) {
-      console.error('No hashed password found for user');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('No hashed password found for user');
+      }
       return false;
     }
-    
-    // Ensure both passwords are strings
     const candidatePasswordStr = String(candidatePassword);
     const storedPasswordHash = String(userPassword);
-    
-    // Check if the stored password is already hashed
     const isHash = /^\$2[aby]?\$\d{1,2}\$[./0-9A-Za-z]{53}$/.test(storedPasswordHash);
-    
     if (!isHash) {
-      console.error('Stored password is not a valid bcrypt hash');
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Stored password is not a valid bcrypt hash');
+      }
       return false;
     }
-    
     const isMatch = await bcrypt.compare(candidatePasswordStr, storedPasswordHash);
-    console.log('Password comparison result:', isMatch);
     return isMatch;
   } catch (error) {
-    console.error('Error in correctPassword:', error);
-    console.error('Error details:', {
-      message: error.message,
-      stack: error.stack,
-      code: error.code,
-      name: error.name
-    });
+    if (process.env.NODE_ENV === 'development') {
+      console.error('Error in correctPassword:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        code: error.code,
+        name: error.name
+      });
+    }
     throw error;
   }
 };
@@ -469,6 +493,8 @@ userSchema.virtual('creditScores', {
 // Indexes
 userSchema.index({ name: 'text', email: 'text', 'profile.phone': 'text' });
 userSchema.index({ email: 1, role: 1 });
+userSchema.index({ phoneNumber: 1 });
+userSchema.index({ status: 1 });
 
 // Premium User Methods
 userSchema.methods.isPremiumUser = function() {

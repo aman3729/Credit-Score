@@ -36,7 +36,9 @@ export class LoanCalculator {
       audit: [],
       classification: this.scoreData.classification,
       score: this.scoreData.score,
-      engineVersion: this.version
+      engineVersion: this.version,
+      collateralValue: this.userData.collateralValue || 0,
+      collateralRequired: (this.userData.collateralValue || 0) > 0
     };
   }
 
@@ -46,7 +48,9 @@ export class LoanCalculator {
       reason,
       score: this.scoreData.score,
       classification: this.scoreData.classification,
-      engineVersion: this.version
+      engineVersion: this.version,
+      collateralValue: this.userData.collateralValue || 0,
+      collateralRequired: (this.userData.collateralValue || 0) > 0
     };
     throw this.offer;
   }
@@ -91,6 +95,12 @@ export class LoanCalculator {
     if (u.recentLoanApplications > 3) {
       this.apply('recentLoanApplications', 'PENALTY', 0, +1.5, 'Multiple recent loan applications');
     }
+
+    // 🔺 Collateral Bonus
+    if (u.collateralValue && u.collateralValue > 0) {
+      const collateralBonus = Math.floor(u.collateralValue * 0.7); // 70% of collateral value
+      this.apply('collateralValue', 'COLLATERAL_BONUS', +collateralBonus, -0.5, `Collateral value of $${u.collateralValue.toLocaleString()} provides security`);
+    }
   }
 
   apply(field, type, amountAdj = 0, rateAdj = 0, message = '') {
@@ -129,7 +139,9 @@ export class LoanCalculator {
       adjustments: this.adjustments,
       auditTrail: this.auditTrail,
       offerScore,
-      riskFlags
+      riskFlags,
+      collateralValue: this.userData.collateralValue || 0,
+      collateralRequired: (this.userData.collateralValue || 0) > 0
     };
   }
 

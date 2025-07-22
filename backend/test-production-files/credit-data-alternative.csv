@@ -1,0 +1,4 @@
+customer_phone,payment_score,credit_usage,account_age,diversity_score,credit_checks,outstanding_amount,late_payments,charge_offs,last_activity,open_accounts,credit_length,recent_transactions,timely_payments,recent_payment_rate,missed_payments_12mo,recent_applications,defaults_3y,late_streak,delinquency_recency,account_types
+0954880513,0.95,0.2,0.85,0.7,1,10000,1,0,2024-12-01,3,60,40,0.94,0.96,1,2,0,0,8,{"creditCard":2,"carLoan":1}
+0954880514,0.88,0.35,0.72,0.6,2,15000,0,0,2024-12-01,2,48,35,0.88,0.92,0,1,0,0,12,{"creditCard":1,"personalLoan":1}
+0954880515,0.75,0.65,0.45,0.4,4,25000,3,1,2024-11-15,1,24,15,0.75,0.7,3,3,1,2,3,{"creditCard":1}

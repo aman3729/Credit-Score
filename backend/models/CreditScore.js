@@ -15,7 +15,7 @@ const factorSchema = new mongoose.Schema({
   },
   impact: {
     type: String,
-    enum: ['high', 'medium', 'low'],
+    enum: ['positive', 'negative', 'neutral'],
     required: [true, 'Impact level is required']
   },
   value: {

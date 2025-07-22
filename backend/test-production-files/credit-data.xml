@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<creditData>
+  <record>
+    <phone number>0954880513</phone number>
+    <paymentHistory>0.95</paymentHistory>
+    <creditUtilization>0.2</creditUtilization>
+    <creditAge>0.85</creditAge>
+    <creditMix>0.7</creditMix>
+    <inquiries>1</inquiries>
+    <totalDebt>10000</totalDebt>
+    <recentMissedPayments>1</recentMissedPayments>
+    <recentDefaults>0</recentDefaults>
+    <lastActiveDate>2024-12-01</lastActiveDate>
+    <activeLoanCount>3</activeLoanCount>
+    <oldestAccountAge>60</oldestAccountAge>
+    <transactionsLast90Days>40</transactionsLast90Days>
+    <onTimePaymentRate>0.94</onTimePaymentRate>
+    <onTimeRateLast6Months>0.96</onTimeRateLast6Months>
+    <missedPaymentsLast12>1</missedPaymentsLast12>
+    <recentLoanApplications>2</recentLoanApplications>
+    <defaultCountLast3Years>0</defaultCountLast3Years>
+    <consecutiveMissedPayments>0</consecutiveMissedPayments>
+    <monthsSinceLastDelinquency>8</monthsSinceLastDelinquency>
+    <loanTypeCounts>{"creditCard":2,"carLoan":1}</loanTypeCounts>
+  </record>
+  <record>
+    <phone number>0954880514</phone number>
+    <paymentHistory>0.88</paymentHistory>
+    <creditUtilization>0.35</creditUtilization>
+    <creditAge>0.72</creditAge>
+    <creditMix>0.6</creditMix>
+    <inquiries>2</inquiries>
+    <totalDebt>15000</totalDebt>
+    <recentMissedPayments>0</recentMissedPayments>
+    <recentDefaults>0</recentDefaults>
+    <lastActiveDate>2024-12-01</lastActiveDate>
+    <activeLoanCount>2</activeLoanCount>
+    <oldestAccountAge>48</oldestAccountAge>
+    <transactionsLast90Days>35</transactionsLast90Days>
+    <onTimePaymentRate>0.88</onTimePaymentRate>
+    <onTimeRateLast6Months>0.92</onTimeRateLast6Months>
+    <missedPaymentsLast12>0</missedPaymentsLast12>
+    <recentLoanApplications>1</recentLoanApplications>
+    <defaultCountLast3Years>0</defaultCountLast3Years>
+    <consecutiveMissedPayments>0</consecutiveMissedPayments>
+    <monthsSinceLastDelinquency>12</monthsSinceLastDelinquency>
+    <loanTypeCounts>{"creditCard":1,"personalLoan":1}</loanTypeCounts>
+  </record>
+  <record>
+    <phone number>0954880515</phone number>
+    <paymentHistory>0.75</paymentHistory>
+    <creditUtilization>0.65</creditUtilization>
+    <creditAge>0.45</creditAge>
+    <creditMix>0.4</creditMix>
+    <inquiries>4</inquiries>
+    <totalDebt>25000</totalDebt>
+    <recentMissedPayments>3</recentMissedPayments>
+    <recentDefaults>1</recentDefaults>
+    <lastActiveDate>2024-11-15</lastActiveDate>
+    <activeLoanCount>1</activeLoanCount>
+    <oldestAccountAge>24</oldestAccountAge>
+    <transactionsLast90Days>15</transactionsLast90Days>
+    <onTimePaymentRate>0.75</onTimePaymentRate>
+    <onTimeRateLast6Months>0.7</onTimeRateLast6Months>
+    <missedPaymentsLast12>3</missedPaymentsLast12>
+    <recentLoanApplications>3</recentLoanApplications>
+    <defaultCountLast3Years>1</defaultCountLast3Years>
+    <consecutiveMissedPayments>2</consecutiveMissedPayments>
+    <monthsSinceLastDelinquency>3</monthsSinceLastDelinquency>
+    <loanTypeCounts>{"creditCard":1}</loanTypeCounts>
+  </record>
+</creditData>

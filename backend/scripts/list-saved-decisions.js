@@ -20,14 +20,14 @@ const connectDB = async () => {
 // List all saved lending decisions
 const listSavedDecisions = async () => {
   try {
-    console.log('🔍 Fetching all credit reports with lending decisions...\n');
+    console.log('🔍 Fetching all credit reports with lending decisions (including history)...\n');
     
-    // Find all credit reports that have lending decisions
+    // Find all credit reports that have lending decisions in history
     const creditReports = await CreditReport.find({
-      'lendingDecision.decision': { $exists: true, $ne: null }
+      'lendingDecisionHistory.0': { $exists: true }
     }).populate('userId', 'email firstName lastName role');
     
-    console.log(`📊 Found ${creditReports.length} credit reports with lending decisions:\n`);
+    console.log(`📊 Found ${creditReports.length} credit reports with lending decision history:\n`);
     
     if (creditReports.length === 0) {
       console.log('❌ No saved lending decisions found in the database.');
@@ -37,55 +37,27 @@ const listSavedDecisions = async () => {
     
     creditReports.forEach((report, index) => {
       const user = report.userId;
-      const decision = report.lendingDecision;
-      
-      console.log(`📋 Decision #${index + 1}:`);
-      console.log(`   👤 User: ${user?.email || 'Unknown'} (${user?.firstName || ''} ${user?.lastName || ''})`);
+      const history = report.lendingDecisionHistory || [];
+      console.log(`\n📋 User #${index + 1}: ${user?.email || 'Unknown'} (${user?.firstName || ''} ${user?.lastName || ''})`);
       console.log(`   🏷️  Role: ${user?.role || 'Unknown'}`);
       console.log(`   📈 Credit Score: ${report.creditScore?.fico?.score || 'N/A'}`);
-      console.log(`   ✅ Decision: ${decision.decision}`);
-      console.log(`   📝 Manual: ${decision.isManual ? 'Yes' : 'No'}`);
-      console.log(`   📅 Evaluated: ${decision.evaluatedAt ? new Date(decision.evaluatedAt).toLocaleString() : 'N/A'}`);
-      console.log(`   👨‍💼 Evaluated By: ${decision.evaluatedBy || 'System'}`);
-      
-      if (decision.manualNotes) {
-        console.log(`   📝 Notes: ${decision.manualNotes}`);
+      if (history.length === 0) {
+        console.log('   ❌ No lending decision history.');
+      } else {
+        history.forEach((decision, i) => {
+          console.log(`   --- Decision #${i + 1} ---`);
+          console.log(`      ✅ Decision: ${decision.decision}`);
+          console.log(`      📝 Manual: ${decision.isManual ? 'Yes' : 'No'}`);
+          console.log(`      📅 Evaluated: ${decision.evaluatedAt ? new Date(decision.evaluatedAt).toLocaleString() : 'N/A'}`);
+          console.log(`      👨‍💼 Evaluated By: ${decision.evaluatedBy || 'System'}`);
+          if (decision.manualNotes) {
+            console.log(`      📝 Notes: ${decision.manualNotes}`);
+          }
+        });
       }
-      
-      if (decision.loanDetails && Object.keys(decision.loanDetails).length > 0) {
-        console.log(`   💰 Loan Details:`);
-        console.log(`      Amount: $${decision.loanDetails.amount || 'N/A'}`);
-        console.log(`      Term: ${decision.loanDetails.term || 'N/A'} months`);
-        console.log(`      Interest Rate: ${decision.loanDetails.interestRate || 'N/A'}%`);
-      }
-      
-      if (decision.reasons && decision.reasons.length > 0) {
-        console.log(`   🎯 Reasons: ${decision.reasons.join(', ')}`);
-      }
-      
-      if (decision.recommendations && decision.recommendations.length > 0) {
-        console.log(`   💡 Recommendations: ${decision.recommendations.join(', ')}`);
-      }
-      
-      console.log(''); // Empty line for readability
     });
-    
-    // Summary statistics
-    const decisions = creditReports.map(r => r.lendingDecision);
-    const approved = decisions.filter(d => d.decision === 'Approve').length;
-    const rejected = decisions.filter(d => d.decision === 'Reject').length;
-    const review = decisions.filter(d => d.decision === 'Review').length;
-    const manual = decisions.filter(d => d.isManual).length;
-    
-    console.log('📊 Summary Statistics:');
-    console.log(`   ✅ Approved: ${approved}`);
-    console.log(`   ❌ Rejected: ${rejected}`);
-    console.log(`   ⏳ Review: ${review}`);
-    console.log(`   ✏️  Manual Decisions: ${manual}`);
-    console.log(`   🤖 Auto Decisions: ${decisions.length - manual}`);
-    
   } catch (error) {
-    console.error('❌ Error listing saved decisions:', error);
+    console.error('Error listing saved decisions:', error);
   }
 };
 

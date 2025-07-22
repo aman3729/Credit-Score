@@ -7,6 +7,7 @@ import CreditScore from '../models/CreditScore.js';
 import { logger } from '../config/logger.js';
 import catchAsync from '../utils/catchAsync.js';
 import AppError from '../utils/appError.js';
+import { getAllLenderAccessHistory } from '../controllers/userController.js';
 
 const router = express.Router();
 
@@ -77,6 +78,18 @@ router.get(
     });
   })
 );
+
+// Admin: get all lenders (for dropdown)
+router.get('/lenders', protect, async (req, res, next) => {
+  try {
+    const lenders = await User.find({ role: 'lender' }).select('_id name email');
+    res.status(200).json({ status: 'success', data: lenders });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: 'Failed to fetch lenders' });
+  }
+});
+// Admin: get all lender access history (global)
+router.get('/lenders/all/access-history', protect, getAllLenderAccessHistory);
 
 // @desc    Get single user
 // @route   GET /api/v1/users/:id
@@ -246,8 +259,11 @@ router.patch(
   [
     body('currentPassword').notEmpty().withMessage('Current password is required'),
     body('newPassword')
-      .isLength({ min: 8 })
-      .withMessage('Password must be at least 8 characters long'),
+      .isLength({ min: 8 }).withMessage('Password must be at least 8 characters long')
+      .matches(/[a-z]/).withMessage('Password must contain a lowercase letter')
+      .matches(/[A-Z]/).withMessage('Password must contain an uppercase letter')
+      .matches(/[0-9]/).withMessage('Password must contain a number')
+      .matches(/[^A-Za-z0-9]/).withMessage('Password must contain a special character'),
   ],
   catchAsync(async (req, res, next) => {
     // 1) Get user from collection
@@ -353,24 +369,41 @@ router.get(
         creditAge: creditReport.creditAge ?? null
       }
     };
-    // Calculate scoreResult
+    // Use existing score and classification from database
+    const existingScore = creditReport.creditScore.fico.score;
+    const existingClassification = creditReport.creditScore?.classification || 'Good';
+    
+    // Calculate scoreResult for breakdown purposes only
     const { calculateCreditScore } = await import('../utils/creditScoring.js');
     const scoreInput = {
       paymentHistory: creditReport.paymentHistory ?? 0,
-      creditUtilization: creditReport.creditUtilization ?? 1,
+      creditUtilization: typeof creditReport.creditUtilization === 'number'
+        ? creditReport.creditUtilization
+        : (typeof creditReport.creditUtilization?.overall === 'number'
+            ? creditReport.creditUtilization.overall
+            : 1),
       creditAge: creditReport.creditAge ?? 0,
       creditMix: creditReport.creditMix ?? 0,
-      inquiries: creditReport.inquiries ?? 1,
+      inquiries: (typeof creditReport.inquiries === 'number' && !isNaN(creditReport.inquiries) && creditReport.inquiries >= 0 && creditReport.inquiries <= 50)
+        ? creditReport.inquiries
+        : 1,
       activeLoanCount: creditReport.openAccounts ?? 0,
     };
-    responseData.data.scoreResult = calculateCreditScore(scoreInput);
+    const calculatedScore = calculateCreditScore(scoreInput);
+    
+    // Use existing score and classification
+    responseData.data.scoreResult = {
+      ...calculatedScore,
+      score: existingScore,
+      classification: existingClassification
+    };
 
     // --- Add lendingDecision using LoanCalculator ---
     try {
       const { LoanCalculator } = await import('../utils/LoanCalculator.js');
       const scoreData = {
         score: responseData.data.currentScore,
-        classification: responseData.data.scoreResult?.classification || 'Unknown',
+        classification: existingClassification,
         version: responseData.data.scoreResult?.version || 'v101',
       };
       const userData = {
@@ -390,6 +423,18 @@ router.get(
       };
       const calculator = new LoanCalculator(scoreData, userData);
       const lendingDecision = calculator.run();
+      
+      // Map approvedAmount to maxLoanAmount for frontend compatibility
+      if (lendingDecision.approvedAmount) {
+        lendingDecision.maxLoanAmount = lendingDecision.approvedAmount;
+      } else if (lendingDecision.approved === false) {
+        // For rejected loans, set maxLoanAmount to 0
+        lendingDecision.maxLoanAmount = 0;
+      } else {
+        // Fallback for any other case
+        lendingDecision.maxLoanAmount = 0;
+      }
+      
       responseData.data.lendingDecision = lendingDecision;
     } catch (err) {
       responseData.data.lendingDecision = { error: 'Failed to generate lending decision', details: err.message };

@@ -1,5 +1,5 @@
-const { logger } = require('../config/logger');
-const AppError = require('../utils/appError');
+import { logger } from '../config/logger.js';
+import AppError from '../utils/appError.js';
 
 // Handle MongoDB cast errors (invalid ID format)
 const handleCastErrorDB = (err) => {
@@ -33,9 +33,9 @@ const sendErrorDev = (err, req, res) => {
   // API error response
   if (req.originalUrl.startsWith('/api')) {
     return res.status(err.statusCode).json({
-      status: err.status,
-      error: err,
+      status: 'error',
       message: err.message,
+      details: err.details || undefined,
       stack: err.stack,
     });
   }
@@ -55,14 +55,13 @@ const sendErrorProd = (err, req, res) => {
     // Operational, trusted error: send message to client
     if (err.isOperational) {
       return res.status(err.statusCode).json({
-        status: err.status,
+        status: 'error',
         message: err.message,
+        details: err.details || undefined,
       });
     }
     // Programming or other unknown error: don't leak error details
-    // 1) Log error
     logger.error('ERROR 💥', err);
-    // 2) Send generic message
     return res.status(500).json({
       status: 'error',
       message: 'Something went very wrong!',
@@ -87,11 +86,30 @@ const sendErrorProd = (err, req, res) => {
 };
 
 // Global error handling middleware
-exports.errorHandler = (err, req, res, next) => {
+export const errorHandler = (err, req, res, next) => {
+  console.log('Error handler caught:', err);
+
+  // Handle CSRF errors with standardized structure
+  if (err.code === 'EBADCSRFTOKEN') {
+    return res.status(403).json({
+      status: 'error',
+      message: 'invalid csrf token',
+    });
+  }
+
   err.statusCode = err.statusCode || 500;
   err.status = err.status || 'error';
 
   if (process.env.NODE_ENV === 'development') {
+    // API error response
+    if (req.originalUrl.startsWith('/api')) {
+      return res.status(err.statusCode).json({
+        status: 'error',
+        message: err.message,
+        details: err.details || undefined,
+        stack: err.stack,
+      });
+    }
     sendErrorDev(err, req, res);
   } else if (process.env.NODE_ENV === 'production') {
     let error = { ...err };
@@ -104,22 +122,40 @@ exports.errorHandler = (err, req, res, next) => {
     if (error.name === 'JsonWebTokenError') error = handleJWTError();
     if (error.name === 'TokenExpiredError') error = handleJWTExpiredError();
 
+    // API error response
+    if (req.originalUrl.startsWith('/api')) {
+      // Operational, trusted error: send message to client
+      if (error.isOperational) {
+        return res.status(error.statusCode).json({
+          status: 'error',
+          message: error.message,
+          details: error.details || undefined,
+        });
+      }
+      // Programming or other unknown error: don't leak error details
+      logger.error('ERROR 💥', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Something went very wrong!',
+      });
+    }
+
     sendErrorProd(error, req, res);
   }
 };
 
 // Handle 404 errors
-exports.notFound = (req, res, next) => {
+export const notFound = (req, res, next) => {
   next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 };
 
 // Handle unhandled routes
-exports.catchAll = (req, res, next) => {
+export const catchAll = (req, res, next) => {
   next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 };
 
 // Handle async/await errors
-exports.catchAsync = (fn) => {
+export const catchAsync = (fn) => {
   return (req, res, next) => {
     fn(req, res, next).catch((err) => next(err));
   };

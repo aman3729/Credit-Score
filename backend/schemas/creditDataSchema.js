@@ -15,6 +15,7 @@ export const creditDataSchema = Joi.object({
   // Financial metrics
   monthlyIncome: Joi.number().min(0).optional(),
   monthlyDebt: Joi.number().min(0).optional(),
+  monthlyDebtPayments: Joi.number().min(0).optional(),
   debtToIncomeRatio: Joi.number().min(0).optional(),
 
   // Credit history

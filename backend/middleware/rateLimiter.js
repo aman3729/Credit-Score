@@ -56,18 +56,42 @@ const monitorSuspiciousActivity = (ip, endpoint) => {
 // Check if IP is whitelisted
 const isWhitelisted = (ip) => WHITELISTED_IPS.has(ip);
 
-// Basic rate limiter for all routes
+// Basic rate limiter for all routes - Production optimized
 export const rateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: (req) => isWhitelisted(req.ip) ? 0 : 100, // Skip limit for whitelisted IPs
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: (req) => {
+    // Different limits based on user role
+    if (isWhitelisted(req.ip)) return 0; // No limit for whitelisted IPs
+    
+    // Higher limits for authenticated users
+    if (req.user) {
+      switch (req.user.role) {
+        case 'admin':
+          return 1000; // 1000 requests per 15 minutes for admins
+        case 'lender':
+          return 500;  // 500 requests per 15 minutes for lenders
+        case 'premium':
+          return 200;  // 200 requests per 15 minutes for premium users
+        default:
+          return 100;  // 100 requests per 15 minutes for regular users
+      }
+    }
+    
+    return 50; // 50 requests per 15 minutes for unauthenticated users
+  },
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => isWhitelisted(req.ip),
   handler: async (req, res) => {
     await alertService.trackRateLimit(req.ip, req.path);
+    
+    // Return more informative error message
     res.status(429).json({
-      error: 'Too many requests from this IP, please try again later.'
+      error: 'Rate limit exceeded',
+      message: 'Too many requests. Please wait before trying again.',
+      retryAfter: Math.ceil(15 * 60 / 60), // Retry after 15 minutes
+      userRole: req.user?.role || 'unauthenticated'
     });
   }
 });
@@ -195,10 +219,45 @@ setInterval(() => {
   });
 }, 24 * 60 * 60 * 1000);
 
+// Rate limiter for dashboard endpoints - More lenient for authenticated users
+export const dashboardLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: (req) => {
+    if (isWhitelisted(req.ip)) return 0;
+    
+    // Higher limits for dashboard endpoints
+    if (req.user) {
+      switch (req.user.role) {
+        case 'admin':
+          return 2000; // 2000 requests per 15 minutes for admins
+        case 'lender':
+          return 1000; // 1000 requests per 15 minutes for lenders
+        case 'premium':
+          return 500;  // 500 requests per 15 minutes for premium users
+        default:
+          return 200;  // 200 requests per 15 minutes for regular users
+      }
+    }
+    
+    return 100; // 100 requests per 15 minutes for unauthenticated users
+  },
+  skip: (req) => isWhitelisted(req.ip),
+  handler: async (req, res) => {
+    await alertService.trackRateLimit(req.ip, req.path);
+    res.status(429).json({
+      error: 'Dashboard rate limit exceeded',
+      message: 'Too many dashboard requests. Please wait before trying again.',
+      retryAfter: Math.ceil(15 * 60 / 60),
+      userRole: req.user?.role || 'unauthenticated'
+    });
+  }
+});
+
 export default {
   rateLimiter,
   authLimiter,
   loginAttemptLimiter,
   verificationLimiter,
-  resendVerificationLimiter
+  resendVerificationLimiter,
+  dashboardLimiter
 }; 

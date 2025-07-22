@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { promisify } from 'util';
+import AppError from './appError.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -76,24 +77,16 @@ const handleUploadError = (err, req, res, next) => {
     console.error('File upload error:', err);
     
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({
-        success: false,
-        message: 'File too large. Maximum size is 10MB.'
-      });
+      return next(new AppError('File too large. Maximum size is 10MB.', 400));
     }
     
     if (err.code === 'INVALID_FILE_TYPE' || err.message.includes('file type')) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid file type. Only .csv and .json files are allowed.'
-      });
+      return next(new AppError('Invalid file type. Only .csv and .json files are allowed.', 400));
     }
     
-    return res.status(500).json({
-      success: false,
-      message: 'Error uploading file',
+    return next(new AppError('Error uploading file', 500, {
       error: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    }));
   }
   
   next();

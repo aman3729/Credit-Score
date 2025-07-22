@@ -1,0 +1,79 @@
+[
+  {
+    "phone number": "0954880513",
+    "paymentHistory": 0.95,
+    "creditUtilization": 0.2,
+    "creditAge": 0.85,
+    "creditMix": 0.7,
+    "inquiries": 1,
+    "totalDebt": 10000,
+    "recentMissedPayments": 1,
+    "recentDefaults": 0,
+    "lastActiveDate": "2024-12-01",
+    "activeLoanCount": 3,
+    "oldestAccountAge": 60,
+    "transactionsLast90Days": 40,
+    "onTimePaymentRate": 0.94,
+    "onTimeRateLast6Months": 0.96,
+    "missedPaymentsLast12": 1,
+    "recentLoanApplications": 2,
+    "defaultCountLast3Years": 0,
+    "consecutiveMissedPayments": 0,
+    "monthsSinceLastDelinquency": 8,
+    "loanTypeCounts": {
+      "creditCard": 2,
+      "carLoan": 1
+    }
+  },
+  {
+    "phone number": "0954880514",
+    "paymentHistory": 0.88,
+    "creditUtilization": 0.35,
+    "creditAge": 0.72,
+    "creditMix": 0.6,
+    "inquiries": 2,
+    "totalDebt": 15000,
+    "recentMissedPayments": 0,
+    "recentDefaults": 0,
+    "lastActiveDate": "2024-12-01",
+    "activeLoanCount": 2,
+    "oldestAccountAge": 48,
+    "transactionsLast90Days": 35,
+    "onTimePaymentRate": 0.88,
+    "onTimeRateLast6Months": 0.92,
+    "missedPaymentsLast12": 0,
+    "recentLoanApplications": 1,
+    "defaultCountLast3Years": 0,
+    "consecutiveMissedPayments": 0,
+    "monthsSinceLastDelinquency": 12,
+    "loanTypeCounts": {
+      "creditCard": 1,
+      "personalLoan": 1
+    }
+  },
+  {
+    "phone number": "0954880515",
+    "paymentHistory": 0.75,
+    "creditUtilization": 0.65,
+    "creditAge": 0.45,
+    "creditMix": 0.4,
+    "inquiries": 4,
+    "totalDebt": 25000,
+    "recentMissedPayments": 3,
+    "recentDefaults": 1,
+    "lastActiveDate": "2024-11-15",
+    "activeLoanCount": 1,
+    "oldestAccountAge": 24,
+    "transactionsLast90Days": 15,
+    "onTimePaymentRate": 0.75,
+    "onTimeRateLast6Months": 0.7,
+    "missedPaymentsLast12": 3,
+    "recentLoanApplications": 3,
+    "defaultCountLast3Years": 1,
+    "consecutiveMissedPayments": 2,
+    "monthsSinceLastDelinquency": 3,
+    "loanTypeCounts": {
+      "creditCard": 1
+    }
+  }
+]

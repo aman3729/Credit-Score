@@ -183,17 +183,20 @@ class UserService {
    * Create new user
    */
   async create(userData) {
+    console.log('[UserService][TEST LOG] create() called');
     try {
       if (isNativeDriver()) {
         const collection = await this.getCollection();
+        console.log('[UserService][Native] Creating user with data:', userData);
         const result = await collection.insertOne(userData);
         return { ...userData, _id: result.insertedId };
       } else {
         const User = await this.getCollection();
+        console.log('[UserService][Mongoose] Creating user with data:', userData);
         return await User.create(userData);
       }
     } catch (error) {
-      console.error('Error creating user:', error);
+      console.error('Error creating user:', error, 'UserData:', userData);
       throw error;
     }
   }

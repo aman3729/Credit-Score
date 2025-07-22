@@ -31,8 +31,8 @@ if (hasDbName) {
 } else {
   // Add the database name to the connection string
   const newUri = currentUri.endsWith('/') 
-    ? `${currentUri}credit-score-db` 
-    : `${currentUri}/credit-score-db`;
+    ? `${currentUri}credit-score-dashboard` 
+    : `${currentUri}/credit-score-dashboard`;
   
   // Update the environment variable
   envConfig.MONGODB_URI = newUri;

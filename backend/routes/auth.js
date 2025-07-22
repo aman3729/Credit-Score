@@ -5,7 +5,8 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import crypto from 'crypto';
 import { emailTemplates, sendEmail } from '../config/email.js';
-import { verificationLimiter, resendVerificationLimiter } from '../middleware/rateLimiter.js';
+import { verificationLimiter, resendVerificationLimiter, authLimiter } from '../middleware/rateLimiter.js';
+import AppError from '../utils/appError.js';
 
 const router = express.Router();
 const skipEmailVerification = process.env.SKIP_EMAIL_VERIFICATION === 'true';
@@ -15,7 +16,12 @@ const registerValidation = [
   body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
   body('username').trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters'),
   body('email').trim().isEmail().withMessage('Please enter a valid email'),
-  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('password')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .matches(/[a-z]/).withMessage('Password must contain a lowercase letter')
+    .matches(/[A-Z]/).withMessage('Password must contain an uppercase letter')
+    .matches(/[0-9]/).withMessage('Password must contain a number')
+    .matches(/[^A-Za-z0-9]/).withMessage('Password must contain a special character'),
   body('passwordConfirm').custom((value, { req }) => {
     if (value !== req.body.password) {
       throw new Error('Password confirmation does not match password');
@@ -82,11 +88,11 @@ router.options('*', (req, res) => {
  * @desc    Verify JWT token and return user data
  * @access  Private
  */
-router.get('/verify-token', protect, async (req, res) => {
+router.get('/verify-token', protect, async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id).select('-password');
     if (!user) {
-      return res.status(404).json({ valid: false, error: 'User not found' });
+      return next(new AppError('User not found', 404));
     }
     
     // Prepare user data matching the login response format
@@ -115,7 +121,7 @@ router.get('/verify-token', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Error in verify-token:', error);
-    res.status(500).json({ valid: false, error: 'Server error' });
+    res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
 
@@ -124,10 +130,10 @@ router.get('/verify-token', protect, async (req, res) => {
  * @desc    Get current user's profile
  * @access  Private
  */
-router.get('/me', protect, async (req, res) => {
+router.get('/me', protect, async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id).select('-password');
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user) return next(new AppError('User not found', 404));
     
     res.json({
       id: user._id,
@@ -141,15 +147,15 @@ router.get('/me', protect, async (req, res) => {
     });
   } catch (err) {
     console.error('Error in /me endpoint:', err);
-    res.status(500).json({ error: 'Server error' });
+    res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
 
 // Login endpoint
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res, next) => {
   const { identifier, password } = req.body;
   if (!identifier || !password) {
-    return res.status(400).json({ message: 'Identifier and password are required.' });
+    return next(new AppError('Identifier and password are required.', 400));
   }
   let user = null;
   if (identifier.includes('@')) {
@@ -158,49 +164,31 @@ router.post('/login', async (req, res) => {
     user = await User.findOne({ phoneNumber: identifier }).select('+password');
   }
   if (!user) {
-    return res.status(401).json({ 
-      message: 'Invalid credentials',
-      error: 'Email/Phone or password is incorrect' 
-    });
+    return next(new AppError('Invalid credentials', 401));
   }
 
   // Check password
   const isPasswordValid = await user.matchPassword(password);
   if (!isPasswordValid) {
-    return res.status(401).json({ 
-      message: 'Invalid credentials',
-      error: 'Email/Phone or password is incorrect' 
-    });
+    return next(new AppError('Invalid credentials', 401));
   }
 
   // Check if email is verified
   if (!user.emailVerified) {
-    return res.status(403).json({ 
-      message: 'Email verification required',
-      error: 'Please verify your email address before logging in. Check your email for the verification link.' 
-    });
+    return next(new AppError('Email verification required', 403));
   }
 
   // Check account status
   if (user.status === 'pending') {
-    return res.status(403).json({ 
-      message: 'Account pending verification',
-      error: 'Your account is pending branch verification. Please visit our branch office to complete the verification process.' 
-    });
+    return next(new AppError('Account pending verification', 403));
   }
 
   if (user.status === 'suspended') {
-    return res.status(403).json({ 
-      message: 'Account suspended',
-      error: 'Your account has been suspended. Please contact support for assistance.' 
-    });
+    return next(new AppError('Account suspended', 403));
   }
 
   if (user.status === 'deactivated') {
-    return res.status(403).json({ 
-      message: 'Account deactivated',
-      error: 'Your account has been deactivated. Please contact support for assistance.' 
-    });
+    return next(new AppError('Account deactivated', 403));
   }
 
   // Update last login
@@ -215,16 +203,26 @@ router.post('/login', async (req, res) => {
   // Generate JWT token
   const token = user.getSignedJwtToken();
 
-  res.json({
-    message: 'Login successful',
-    token,
-    user: {
-      id: user._id,
-      username: user.username,
-      email: user.email,
-      role: user.role,
-      emailVerified: user.emailVerified,
-      status: user.status
+  // Set JWT as httpOnly cookie
+  res.cookie('jwt', token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: 24 * 60 * 60 * 1000 // 1 day
+  });
+
+  // Respond with new structure
+  res.status(200).json({
+    status: 'success',
+    data: {
+      user: {
+        id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        emailVerified: user.emailVerified,
+        status: user.status
+      }
     }
   });
 });
@@ -238,7 +236,8 @@ router.post('/register', [
   body('phoneNumber').notEmpty().withMessage('Phone number is required')
     .matches(/^\+?\d{9,15}$/).withMessage('Phone number must be 9-15 digits, can start with +'),
   body('password').notEmpty().isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
-], async (req, res) => {
+], async (req, res, next) => {
+  console.log('[Signup] /register route hit. Payload:', req.body);
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -248,31 +247,31 @@ router.post('/register', [
     // Check for existing user by phone number
     let user = await User.findOne({ phoneNumber });
     if (user) {
-      return res.status(400).json({ error: 'Phone number already registered' });
+      return next(new AppError('Phone number already registered', 400));
     }
     // Optionally check for existing email
     if (email) {
       user = await User.findOne({ email });
       if (user) {
-        return res.status(400).json({ error: 'Email already registered' });
+        return next(new AppError('Email already registered', 400));
       }
     }
     // Create user
-    const newUser = new User({ username, name, phoneNumber, email, password });
-    if (password) await newUser.save();
+    const newUser = new User(req.body);
+    if (req.body.password) await newUser.save();
     else await newUser.save({ validateBeforeSave: false });
     res.status(201).json({ success: true, user: { _id: newUser._id, name: newUser.name, phoneNumber: newUser.phoneNumber } });
   } catch (err) {
-    res.status(500).json({ error: 'Registration failed', details: err.message });
+    res.status(500).json({ status: 'error', message: 'Registration failed', details: err.message });
   }
 });
 
 // Resend verification email
-router.post('/resend-verification', protect, resendVerificationLimiter, async (req, res) => {
+router.post('/resend-verification', protect, resendVerificationLimiter, async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.emailVerified) return res.status(400).json({ error: 'Email is already verified' });
+    if (!user) return next(new AppError('User not found', 404));
+    if (user.emailVerified) return next(new AppError('Email is already verified', 400));
 
     // Generate new token
     const verificationToken = crypto.randomBytes(32).toString('hex');
@@ -290,12 +289,12 @@ router.post('/resend-verification', protect, resendVerificationLimiter, async (r
     res.json({ message: 'Verification email sent successfully' });
   } catch (error) {
     console.error('Error resending verification email:', error);
-    res.status(500).json({ error: 'Failed to resend verification email' });
+    res.status(500).json({ status: 'error', message: 'Failed to resend verification email' });
   }
 });
 
 // Verify email
-router.get('/verify-email/:token', verificationLimiter, async (req, res) => {
+router.get('/verify-email/:token', verificationLimiter, async (req, res, next) => {
   try {
     const hashedToken = crypto.createHash('sha256').update(req.params.token).digest('hex');
     const user = await User.findOne({
@@ -303,7 +302,7 @@ router.get('/verify-email/:token', verificationLimiter, async (req, res) => {
       emailVerificationTokenExpires: { $gt: Date.now() }
     });
 
-    if (!user) return res.status(400).json({ error: 'Invalid or expired verification token' });
+    if (!user) return next(new AppError('Invalid or expired verification token', 400));
 
     user.emailVerified = true;
     user.emailVerificationToken = undefined;
@@ -313,17 +312,17 @@ router.get('/verify-email/:token', verificationLimiter, async (req, res) => {
     res.json({ message: 'Email verified successfully' });
   } catch (error) {
     console.error('Error verifying email:', error);
-    res.status(500).json({ error: 'Failed to verify email' });
+    res.status(500).json({ status: 'error', message: 'Failed to verify email' });
   }
 });
 
 // Get user profile
-router.get('/user-profile', protect, async (req, res) => {
+router.get('/user-profile', protect, async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id)
       .select('-password -ssnLast4 -twoFactorSecret -resetPasswordToken -resetPasswordExpire');
     
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!user) return next(new AppError('User not found', 404));
     
     res.json({
       id: user._id,
@@ -339,7 +338,7 @@ router.get('/user-profile', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching user profile:', error);
-    res.status(500).json({ error: 'Error fetching user profile' });
+    res.status(500).json({ status: 'error', message: 'Error fetching user profile' });
   }
 });
 
@@ -348,14 +347,12 @@ router.get('/user-profile', protect, async (req, res) => {
  * @desc    Check if email is available
  * @access  Public
  */
-router.get('/check-email', async (req, res) => {
+router.get('/check-email', async (req, res, next) => {
   try {
     const { email } = req.query;
     
     if (!email) {
-      return res.status(400).json({ 
-        error: 'Email parameter is required' 
-      });
+      return next(new AppError('Email parameter is required', 400));
     }
 
     const existingUser = await User.findOne({ email: email.toLowerCase() });
@@ -366,9 +363,7 @@ router.get('/check-email', async (req, res) => {
     });
   } catch (error) {
     console.error('Email check error:', error);
-    res.status(500).json({ 
-      error: 'Server error' 
-    });
+    res.status(500).json({ status: 'error', message: 'Server error' });
   }
 });
 
@@ -377,14 +372,11 @@ router.get('/check-email', async (req, res) => {
  * @desc    Approve user after branch verification (Admin only)
  * @access  Private (Admin)
  */
-router.put('/approve-user/:userId', protect, async (req, res) => {
+router.put('/approve-user/:userId', protect, async (req, res, next) => {
   try {
     // Check if user is admin
     if (req.user.role !== 'admin') {
-      return res.status(403).json({ 
-        message: 'Access denied',
-        error: 'Only administrators can approve users' 
-      });
+      return next(new AppError('Access denied', 403));
     }
 
     const { userId } = req.params;
@@ -392,10 +384,7 @@ router.put('/approve-user/:userId', protect, async (req, res) => {
 
     const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({ 
-        message: 'User not found',
-        error: 'User does not exist' 
-      });
+      return next(new AppError('User not found', 404));
     }
 
     // Update user status and admin fields
@@ -422,10 +411,7 @@ router.put('/approve-user/:userId', protect, async (req, res) => {
     });
   } catch (error) {
     console.error('User approval error:', error);
-    res.status(500).json({ 
-      message: 'Server error',
-      error: 'Internal server error'
-    });
+    res.status(500).json({ status: 'error', message: 'Internal server error', details: error.message });
   }
 });
 

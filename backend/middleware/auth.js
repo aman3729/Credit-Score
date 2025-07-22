@@ -16,12 +16,19 @@ const protect = async (req, res, next) => {
   ) {
     // Get token from header
     token = req.headers.authorization.split(' ')[1];
+    console.log('Token from Authorization header:', token);
+  } else if (req.cookies && req.cookies.jwt) {
+    // Get token from jwt cookie (primary)
+    token = req.cookies.jwt;
+    console.log('Token from jwt cookie:', token);
   } else if (req.cookies && req.cookies.token) {
-    // Get token from cookie
+    // Fallback: legacy token cookie
     token = req.cookies.token;
+    console.log('Token from token cookie:', token);
   } else if (req.query && req.query.token) {
     // Get token from query parameter (for email verification, password reset, etc.)
     token = req.query.token;
+    console.log('Token from query param:', token);
   }
 
   // 2) Check if token exists
@@ -248,6 +255,22 @@ const maskSensitiveResponse = (req, res, next) => {
   
   next();
 };
+
+// Middleware to enforce valid, unexpired consent
+export function requireValidConsent(req, res, next) {
+  // Allow admins to bypass consent checks
+  if (req.user?.role === 'admin') {
+    return next();
+  }
+  const consent = req.user?.legalConsent;
+  if (!consent?.creditChecksAuthorized || !consent?.consentExpiresAt || new Date(consent.consentExpiresAt) < new Date()) {
+    return res.status(403).json({
+      status: 'error',
+      message: 'User consent required or has expired. Please renew your consent to continue.'
+    });
+  }
+  next();
+}
 
 // Export all middleware functions
 export {

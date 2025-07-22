@@ -101,11 +101,7 @@ router.get('/credit-reports', auth, requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching credit reports:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch credit reports',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch credit reports', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -181,12 +177,14 @@ router.get('/users', auth, requireAdmin, async (req, res) => {
         const creditReport = await CreditReport.findOne({ userId: user._id }).lean();
         const name = user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'N/A';
         const status = user.status || user.accountStatus || 'inactive';
+        const role = user.role || 'user'; // Ensure role is always present
         return {
           ...user,
           creditScore: creditReport?.creditScore?.fico?.score || 'N/A',
           lastScoreUpdate: creditReport?.lastUpdated || null,
           name,
-          status
+          status,
+          role // Explicitly include role
         };
       })
     );
@@ -204,7 +202,7 @@ router.get('/users', auth, requireAdmin, async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching users:', error);
-    res.status(500).json({ error: 'Failed to fetch users' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch users' });
   }
 });
 
@@ -279,7 +277,7 @@ router.post('/recalculate-score/:userId', auth, requireAdmin, async (req, res) =
     });
   } catch (error) {
     console.error('Error recalculating score:', error);
-    res.status(500).json({ error: 'Failed to recalculate score' });
+    res.status(500).json({ status: 'error', message: 'Failed to recalculate score' });
   }
 });
 
@@ -290,7 +288,7 @@ router.delete('/users/:userId', auth, requireAdmin, async (req, res) => {
     await UserScore.findOneAndDelete({ userId: req.params.userId });
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Error deleting user' });
+    res.status(500).json({ status: 'error', message: 'Error deleting user' });
   }
 });
 
@@ -417,7 +415,7 @@ router.get('/users/:userId', auth, requireAdmin, async (req, res) => {
     if (error.stack) {
       console.error('Error stack:', error.stack);
     }
-    res.status(500).json({ error: 'Error fetching user details' });
+    res.status(500).json({ status: 'error', message: 'Error fetching user details' });
   }
 });
 
@@ -437,7 +435,7 @@ router.patch('/users/:userId/role', auth, requireAdmin, async (req, res) => {
 
     res.json(user);
   } catch (error) {
-    res.status(500).json({ error: 'Error updating user role' });
+    res.status(500).json({ status: 'error', message: 'Error updating user role' });
   }
 });
 
@@ -459,7 +457,7 @@ router.post('/promote/:userId', auth, requireAdmin, async (req, res) => {
       user
     });
   } catch (error) {
-    res.status(500).json({ error: 'Error promoting user to admin' });
+    res.status(500).json({ status: 'error', message: 'Error promoting user to admin' });
   }
 });
 
@@ -492,7 +490,7 @@ router.patch('/users/:userId/status', auth, requireAdmin, async (req, res) => {
 
   } catch (error) {
     console.error('Error changing user status:', error);
-    res.status(500).json({ error: 'Failed to change user status' });
+    res.status(500).json({ status: 'error', message: 'Failed to change user status' });
   }
 });
 
@@ -543,7 +541,8 @@ router.post('/users/:userId/verify', auth, requireAdmin, async (req, res) => {
     logger.error('Admin context:', req.user?._id, req.user?.email);
     
     res.status(500).json({ 
-      error: 'Failed to verify user',
+      status: 'error',
+      message: 'Failed to verify user',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -577,7 +576,7 @@ router.post('/users/:userId/reset-password', auth, requireAdmin, async (req, res
 
   } catch (error) {
     console.error('Error resetting password:', error);
-    res.status(500).json({ error: 'Failed to reset password' });
+    res.status(500).json({ status: 'error', message: 'Failed to reset password' });
   }
 });
 
@@ -625,7 +624,7 @@ router.post('/users/:userId/impersonate', auth, requireAdmin, async (req, res) =
 
   } catch (error) {
     console.error('Error impersonating user:', error);
-    res.status(500).json({ error: 'Failed to impersonate user' });
+    res.status(500).json({ status: 'error', message: 'Failed to impersonate user' });
   }
 });
 
@@ -688,7 +687,7 @@ router.get('/security-logs', auth, requireAdmin, async (req, res) => {
     }
   } catch (error) {
     console.error('Error fetching security logs:', error);
-    res.status(500).json({ error: 'Failed to fetch security logs' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch security logs' });
   }
 });
 
@@ -745,7 +744,7 @@ router.get('/security-stats', auth, requireAdmin, async (req, res) => {
     }
   } catch (error) {
     console.error('Error fetching security stats:', error);
-    res.status(500).json({ error: 'Failed to fetch security stats' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch security stats' });
   }
 });
 
@@ -764,7 +763,7 @@ router.post('/alerts/:alertId/acknowledge', auth, requireAdmin, async (req, res)
     }
   } catch (error) {
     console.error('Error acknowledging alert:', error);
-    res.status(500).json({ error: 'Failed to acknowledge alert' });
+    res.status(500).json({ status: 'error', message: 'Failed to acknowledge alert' });
   }
 });
 
@@ -781,7 +780,7 @@ router.get('/alerts/:alertId/acknowledgment', auth, requireAdmin, async (req, re
     }
   } catch (error) {
     console.error('Error getting alert acknowledgment:', error);
-    res.status(500).json({ error: 'Failed to get alert acknowledgment' });
+    res.status(500).json({ status: 'error', message: 'Failed to get alert acknowledgment' });
   }
 });
 
@@ -795,7 +794,7 @@ router.get('/credit-reports', auth, requireAdmin, async (req, res) => {
     await getAllCreditReports(req, res);
   } catch (err) {
     console.error('Error in credit-reports route:', err);
-    res.status(500).json({ error: 'Failed to fetch credit reports' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch credit reports' });
   }
 });
 
@@ -809,7 +808,7 @@ router.get('/credit-reports/:userId', auth, requireAdmin, async (req, res) => {
     await getCreditReport(req, res);
   } catch (err) {
     console.error('Error in credit-report route:', err);
-    res.status(500).json({ error: 'Failed to fetch credit report' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch credit report' });
   }
 });
 
@@ -868,10 +867,7 @@ router.post('/credit-reports/recalculate-all', auth, requireAdmin, async (req, r
     });
   } catch (error) {
     logger.error('Error in recalculate-all:', error);
-    res.status(500).json({ 
-      error: 'Failed to recalculate credit scores',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to recalculate credit scores', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -945,10 +941,7 @@ router.post('/credit-reports/flag-suspicious', auth, requireAdmin, async (req, r
     });
   } catch (error) {
     logger.error('Error in flag-suspicious:', error);
-    res.status(500).json({ 
-      error: 'Failed to flag suspicious scores',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to flag suspicious scores', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -993,7 +986,7 @@ router.put('/users/:userId', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error updating user:', error);
-    res.status(500).json({ error: 'Failed to update user' });
+    res.status(500).json({ status: 'error', message: 'Failed to update user' });
   }
 });
 
@@ -1027,7 +1020,7 @@ router.delete('/users/:userId', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error deleting user:', error);
-    res.status(500).json({ error: 'Failed to delete user' });
+    res.status(500).json({ status: 'error', message: 'Failed to delete user' });
   }
 });
 
@@ -1130,7 +1123,7 @@ router.get('/credit-reports', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching credit reports:', error);
-    res.status(500).json({ error: 'Failed to fetch credit reports' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch credit reports' });
   }
 });
 
@@ -1182,7 +1175,7 @@ router.post('/credit-reports/:userId/recalculate', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error recalculating credit score:', error);
-    res.status(500).json({ error: 'Failed to recalculate credit score' });
+    res.status(500).json({ status: 'error', message: 'Failed to recalculate credit score' });
   }
 });
 
@@ -1233,7 +1226,7 @@ router.post('/credit-reports/:userId/annotate', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error annotating credit score:', error);
-    res.status(500).json({ error: 'Failed to annotate credit score' });
+    res.status(500).json({ status: 'error', message: 'Failed to annotate credit score' });
   }
 });
 
@@ -1248,37 +1241,45 @@ router.post('/credit-reports/:userId/annotate', auth, async (req, res) => {
  */
 router.get('/lending-decisions', auth, requireAdmin, async (req, res) => {
   try {
-    // Find recent lending decisions (last 100)
-    const reports = await CreditReport.find({ 'lendingDecision.decision': { $exists: true } })
-      .sort({ 'lendingDecision.date': -1 })
+    // Find recent credit reports
+    const reports = await CreditReport.find({ 'lendingDecisionHistory.0': { $exists: true } })
+      .sort({ 'lendingDecisionHistory.evaluatedAt': -1 })
       .limit(100)
       .lean();
 
-    // Get user info for applicants and officers
+    // Collect all user and officer IDs
     const userIds = reports.map(r => r.userId).filter(Boolean);
-    const officerIds = reports.map(r => r.lendingDecision?.officerId).filter(Boolean);
+    const officerIds = reports.flatMap(r => (r.lendingDecisionHistory || []).map(d => d.evaluatedBy)).filter(Boolean);
     const allUserIds = [...new Set([...userIds, ...officerIds])];
     const users = await User.find({ _id: { $in: allUserIds } }).lean();
-
-    // Map userId to user
     const userMap = {};
     users.forEach(u => { userMap[u._id.toString()] = u; });
 
-    // Format decisions
-    const decisions = reports.map(r => ({
-      applicant: userMap[r.userId?.toString()] || null,
-      decision: r.lendingDecision?.decision || 'N/A',
-      score: r.creditScore?.fico?.score ?? r.score ?? 'N/A',
-      reason: Array.isArray(r.lendingDecision?.reasons) ? r.lendingDecision.reasons.join(', ') : (r.lendingDecision?.reason || ''),
-      officer: userMap[r.lendingDecision?.officerId?.toString()] || null,
-      date: r.lendingDecision?.date || r.lastUpdated || r.updatedAt || r.createdAt,
-      reportId: r._id
-    }));
+    // Flatten all lending decisions, but only include those made manually (isManual: true)
+    const decisions = reports.flatMap(r =>
+      (r.lendingDecisionHistory || [])
+        .filter(d => d.isManual === true)
+        .map(d => {
+          const officer = userMap[d.evaluatedBy?.toString()] || null;
+          return {
+            applicant: userMap[r.userId?.toString()] || null,
+            decision: d.decision || 'N/A',
+            score: r.creditScore?.fico?.score ?? r.score ?? 'N/A',
+            reason: Array.isArray(d.reasons) ? d.reasons.join(', ') : (d.reason || ''),
+            officer,
+            bank: officer?.bankId || null,
+            date: d.evaluatedAt || r.lastUpdated || r.updatedAt || r.createdAt,
+            reportId: r._id,
+            id: d._id || undefined,
+            raw: d
+          };
+        })
+    );
 
     res.json({ decisions });
   } catch (error) {
     logger.error('Error fetching lending decisions:', error);
-    res.status(500).json({ error: 'Failed to fetch lending decisions' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch lending decisions' });
   }
 });
 
@@ -1336,7 +1337,7 @@ router.get('/lending-decisions/export', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error exporting lending decisions:', error);
-    res.status(500).json({ error: 'Failed to export lending decisions' });
+    res.status(500).json({ status: 'error', message: 'Failed to export lending decisions' });
   }
 });
 
@@ -1389,7 +1390,7 @@ router.put('/credit-reports/:userId/override', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error overriding credit data:', error);
-    res.status(500).json({ error: 'Failed to override credit data' });
+    res.status(500).json({ status: 'error', message: 'Failed to override credit data' });
   }
 });
 
@@ -1441,7 +1442,7 @@ router.put('/credit-reports/:userId/override-decision', auth, async (req, res) =
 
   } catch (error) {
     console.error('Error overriding lending decision:', error);
-    res.status(500).json({ error: 'Failed to override lending decision' });
+    res.status(500).json({ status: 'error', message: 'Failed to override lending decision' });
   }
 });
 
@@ -1507,7 +1508,7 @@ router.get('/audit-logs', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching audit logs:', error);
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch audit logs' });
   }
 });
 
@@ -1608,10 +1609,7 @@ router.get('/analytics', auth, requireAdmin, async (req, res) => {
     res.json(analyticsData);
   } catch (error) {
     logger.error('Error fetching analytics:', error);
-    res.status(500).json({ 
-      error: 'Failed to fetch analytics data',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch analytics data', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -1625,6 +1623,8 @@ router.get('/analytics', auth, requireAdmin, async (req, res) => {
  * @access  Private (Admin only)
  */
 router.get('/stats', auth, requireAdmin, async (req, res) => {
+  console.log('Entered /admin/stats route'); // Debug log
+  console.log('req.user:', req.user); // Debug log
   try {
     logger.info('Fetching admin dashboard stats...');
     const routeStart = Date.now();
@@ -1726,7 +1726,7 @@ router.post('/users/:userId/approve', auth, requireAdmin, async (req, res) => {
     // Log the action
     await SecurityLog.create({
       action: approved ? 'user_approved' : 'user_rejected',
-      userId: user._id,
+      user: user._id, // <-- required field for SecurityLog
       adminId: req.user._id,
       details: {
         adminNotes,
@@ -1774,7 +1774,7 @@ router.post('/users/:userId/approve', auth, requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Error approving user:', error);
-    res.status(500).json({ error: 'Failed to process approval' });
+    res.status(500).json({ status: 'error', message: 'Failed to process approval' });
   }
 });
 
@@ -1859,7 +1859,8 @@ router.get('/system/health', auth, requireAdmin, async (req, res) => {
   } catch (error) {
     logger.error('Error fetching system health:', error);
     res.status(500).json({ 
-      error: 'Failed to fetch system health',
+      status: 'error',
+      message: 'Failed to fetch system health',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1891,7 +1892,8 @@ router.get('/system/logs', auth, requireAdmin, async (req, res) => {
   } catch (error) {
     logger.error('Error fetching system logs:', error);
     res.status(500).json({ 
-      error: 'Failed to fetch system logs',
+      status: 'error',
+      message: 'Failed to fetch system logs',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1927,7 +1929,8 @@ router.get('/system/metrics', auth, requireAdmin, async (req, res) => {
   } catch (error) {
     logger.error('Error fetching system metrics:', error);
     res.status(500).json({ 
-      error: 'Failed to fetch system metrics',
+      status: 'error',
+      message: 'Failed to fetch system metrics',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1963,7 +1966,8 @@ router.post('/system/restart/:service', auth, requireAdmin, async (req, res) => 
   } catch (error) {
     logger.error(`Error restarting service ${req.params.service}:`, error);
     res.status(500).json({ 
-      error: 'Failed to restart service',
+      status: 'error',
+      message: 'Failed to restart service',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -1976,7 +1980,7 @@ router.get('/admin-users', auth, requireAdmin, async (req, res) => {
     res.json({ admins });
   } catch (error) {
     logger.error('Error fetching admin users:', error);
-    res.status(500).json({ error: 'Failed to fetch admin users' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch admin users' });
   }
 });
 
@@ -1991,7 +1995,7 @@ router.get('/audit-logs/:adminId', auth, requireAdmin, async (req, res) => {
     res.json({ logs });
   } catch (error) {
     logger.error('Error fetching audit logs:', error);
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch audit logs' });
   }
 });
 

@@ -1,7 +1,5 @@
 import mongoose from 'mongoose';
 import { MongoClient } from 'mongodb';
-import 'dotenv/config';
-
 // Get MongoDB URI from environment
 let MONGODB_URI = process.env.MONGODB_URI;
 

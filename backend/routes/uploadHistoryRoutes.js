@@ -37,10 +37,7 @@ router.get('/', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching upload history:', error);
-    res.status(500).json({ 
-      message: 'Server error',
-      error: error.message 
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch upload history', details: error.message });
   }
 });
 
@@ -78,10 +75,7 @@ router.get('/user/:userId', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching user upload history:', error);
-    res.status(500).json({ 
-      message: 'Server error',
-      error: error.message 
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch user upload history', details: error.message });
   }
 });
 

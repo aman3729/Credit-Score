@@ -1,9 +1,12 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import { auth } from '../middleware/auth.js';
+import { rateLimiter, dashboardLimiter } from '../middleware/rateLimiter.js';
 import CreditReport from '../models/CreditReport.js';
 import User from '../models/User.js';
 import { LoanCalculator } from '../utils/LoanCalculator.js';
+import CreditScore from '../models/CreditScore.js';
+import SecurityLog from '../models/SecurityLog.js';
 
 const router = express.Router();
 
@@ -34,7 +37,7 @@ router.get('/debug/credit-reports', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Debug error:', error);
-    res.status(500).json({ error: 'Debug error', details: error.message });
+    res.status(500).json({ status: 'error', message: 'Debug error', details: error.message });
   }
 });
 
@@ -87,11 +90,7 @@ router.get('/debug/credit-report-structure', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Debug error:', error);
-    res.status(500).json({ 
-      error: 'Debug error', 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Debug error', details: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
   }
 });
 
@@ -139,19 +138,14 @@ router.get('/debug/all-users-reports', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Debug error:', error);
-    res.status(500).json({ 
-      error: 'Debug error', 
-      details: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Debug error', details: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
   }
 });
 
 // Import the CreditScore model if not already imported
-import CreditScore from '../models/CreditScore.js';
 
 // Get list of borrowers with credit reports
-router.get('/borrowers', auth, async (req, res) => {
+router.get('/borrowers', rateLimiter, auth, async (req, res) => {
   try {
     // Only allow lenders and admins to access this endpoint
     if (!['lender', 'admin'].includes(req.user.role)) {
@@ -194,10 +188,7 @@ router.get('/borrowers', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching borrowers:', error);
-    res.status(500).json({
-      error: 'Failed to fetch borrowers',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch borrowers', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -293,10 +284,7 @@ router.get('/credit-report/:userId', auth, async (req, res) => {
     res.json(safeReport);
   } catch (error) {
     console.error('Error fetching credit report:', error);
-    res.status(500).json({ 
-      error: 'Error fetching credit report',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Error fetching credit report', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -328,7 +316,7 @@ router.get('/fraud-check/:userId', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error in fraud check:', error);
-    res.status(500).json({ error: 'Error performing fraud check' });
+    res.status(500).json({ status: 'error', message: 'Error performing fraud check' });
   }
 });
 
@@ -369,42 +357,97 @@ router.get('/lending-decision/:userId', auth, async (req, res) => {
 
     // Otherwise, generate a new decision as before
     const scoreInput = {
-      paymentHistory: creditReport.paymentHistory ?? 0,
-      creditUtilization: creditReport.creditUtilization ?? 1,
-      creditAge: creditReport.creditAge ?? 0,
-      creditMix: creditReport.creditMix ?? 0,
-      inquiries: creditReport.inquiries ?? 1,
-      activeLoanCount: creditReport.openAccounts ?? 0,
+      paymentHistory: creditReport.paymentHistory || 0,
+      creditUtilization: typeof creditReport.creditUtilization === 'number'
+        ? creditReport.creditUtilization
+        : (typeof creditReport.creditUtilization?.overall === 'number'
+            ? creditReport.creditUtilization.overall
+            : 0),
+      creditAge: creditReport.creditAge || 0,
+      creditMix: creditReport.creditMix || 0,
+      inquiries: (typeof creditReport.inquiries === 'number' && !isNaN(creditReport.inquiries))
+        ? creditReport.inquiries
+        : 0,
+      activeLoanCount: creditReport.openAccounts || 0,
+      monthlyIncome: creditReport.monthlyIncome || 0,
+      monthlyDebtPayments: (creditReport.totalDebt || 0) * 0.1 // Estimate monthly payments as 10% of total debt
     };
-    const { LoanCalculator } = await import('../utils/LoanCalculator.js');
-    const scoreData = {
-      score: creditReport.creditScore?.fico?.score ?? 0,
-      classification: creditReport.creditScore?.classification ?? 'Unknown',
-      version: 'v101',
+    
+    // Use the existing score from the database instead of recalculating
+    const existingScore = creditReport.creditScore?.fico?.score;
+    const existingClassification = creditReport.creditScore?.classification || 'Good';
+    
+    // Calculate DTI consistently
+    const calculatedDti = (creditReport.monthlyIncome > 0 && creditReport.totalDebt) 
+      ? +(creditReport.totalDebt / creditReport.monthlyIncome).toFixed(4)
+      : 0;
+    
+    // Calculate credit score for breakdown purposes only
+    const { calculateCreditScore } = await import('../utils/creditScoring.js');
+    const scoreResult = calculateCreditScore(scoreInput);
+    
+    // Create a score result object using the existing score
+    const scoreResultForLending = {
+      ...scoreResult,
+      score: existingScore,
+      classification: existingClassification,
+      dti: calculatedDti
     };
-    const userData = {
+    
+    // Ensure breakdown structure exists and update DTI
+    if (!scoreResultForLending.breakdown) scoreResultForLending.breakdown = {};
+    if (!scoreResultForLending.breakdown.componentRatings) {
+      scoreResultForLending.breakdown.componentRatings = {};
+    }
+    
+    // Update DTI component with consistent calculation
+    scoreResultForLending.breakdown.componentRatings.dti = {
+      value: calculatedDti, // Use decimal value directly
+      label: calculatedDti < 0.2 ? 'Excellent' : 
+             calculatedDti < 0.35 ? 'Good' : 
+             calculatedDti < 0.5 ? 'Fair' : 'Poor'
+    };
+    
+    console.log('DEBUG: Lender lending-decision scoreInput:', JSON.stringify(scoreInput, null, 2));
+    console.log('DEBUG: Lender lending-decision using existing score:', existingScore, 'classification:', existingClassification);
+    console.log('DEBUG: Lender lending-decision scoreResultForLending:', JSON.stringify(scoreResultForLending, null, 2));
+    
+    // Use evaluateLendingDecision for proper data structure
+    const { evaluateLendingDecision } = await import('../utils/lendingDecision.js');
+    const userDataForLending = {
       ...scoreInput,
-      onTimePaymentRate: creditReport.onTimePaymentRate ?? 1,
-      onTimeRateLast6Months: creditReport.onTimeRateLast6Months ?? 1,
-      loanTypeCounts: creditReport.loanTypeCounts ?? {},
-      missedPaymentsLast12: creditReport.missedPaymentsLast12 ?? 0,
-      recentLoanApplications: creditReport.recentLoanApplications ?? 0,
-      defaultCountLast3Years: creditReport.defaultCountLast3Years ?? 0,
-      consecutiveMissedPayments: creditReport.consecutiveMissedPayments ?? 0,
-      recentDefaults: creditReport.recentDefaults ?? 0,
-      monthsSinceLastDelinquency: creditReport.monthsSinceLastDelinquency ?? 999,
-      activeLoanCount: creditReport.openAccounts ?? 0,
-      monthlyIncome: creditReport.monthlyIncome ?? 0,
-      totalDebt: creditReport.totalDebt ?? 0,
+      onTimePaymentRate: creditReport.onTimePaymentRate || 1,
+      onTimeRateLast6Months: creditReport.onTimeRateLast6Months || 1,
+      loanTypeCounts: creditReport.loanTypeCounts || {},
+      missedPaymentsLast12: creditReport.missedPaymentsLast12 || 0,
+      recentLoanApplications: creditReport.recentLoanApplications || 0,
+      defaultCountLast3Years: creditReport.defaultCountLast3Years || 0,
+      consecutiveMissedPayments: creditReport.consecutiveMissedPayments || 0,
+      recentDefaults: creditReport.recentDefaults || 0,
+      monthsSinceLastDelinquency: creditReport.monthsSinceLastDelinquency || 999,
+      activeLoanCount: creditReport.openAccounts || 0,
+      monthlyIncome: creditReport.monthlyIncome || 0,
+      totalDebt: creditReport.totalDebt || 0,
+      employmentStatus: 'employed', // Default assumption
+      collateralValue: 0
     };
-    const calculator = new LoanCalculator(scoreData, userData);
-    const lendingDecision = calculator.run();
-    lendingDecision.decision = lendingDecision.approved === true
-      ? 'Approve'
-      : (lendingDecision.approved === false ? 'Reject' : 'Review');
+    
+    const lendingDecision = evaluateLendingDecision(scoreResultForLending, userDataForLending);
+    
+    // Ensure we use the classification from the existing score
+    lendingDecision.classification = existingClassification;
+    
+    // Map offer fields to expected frontend format
+    if (lendingDecision.offer) {
+      lendingDecision.maxLoanAmount = lendingDecision.offer.maxAmount || 0;
+      lendingDecision.suggestedInterestRate = lendingDecision.offer.interestRate || 0;
+    }
+    
+    console.log('DEBUG: Lender lendingDecision:', JSON.stringify(lendingDecision, null, 2));
+    
     res.json({ success: true, userId, lendingDecision, evaluatedAt: new Date() });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to evaluate lending decision', details: error.message });
+    res.status(500).json({ status: 'error', message: 'Failed to evaluate lending decision', details: error.message });
   }
 });
 
@@ -434,7 +477,13 @@ router.post('/lending-decision/:userId/recalculate', auth, async (req, res) => {
     const userData = {
       email: user.email,
       paymentHistory: user.paymentHistory ?? 1,
-      creditUtilization: user.creditUtilization ?? creditReport.creditUtilization ?? 0,
+      creditUtilization: typeof user.creditUtilization === 'number'
+        ? user.creditUtilization
+        : (typeof creditReport.creditUtilization === 'number'
+            ? creditReport.creditUtilization
+            : (typeof creditReport.creditUtilization?.overall === 'number'
+                ? creditReport.creditUtilization.overall
+                : 0)),
       creditAge: user.creditAge ?? creditReport.creditAge ?? 0,
       creditMix: user.creditMix ?? 0,
       inquiries: user.inquiries ?? 0,
@@ -466,16 +515,96 @@ router.post('/lending-decision/:userId/recalculate', auth, async (req, res) => {
       economicIndicator: userData.economicIndicator,
       primeRate: userData.primeRate
     };
+    
+    // Calculate credit score first
+    const { calculateCreditScore } = await import('../utils/creditScoring.js');
+    const scoreInput = {
+      paymentHistory: userData.paymentHistory || 0,
+      creditUtilization: typeof userData.creditUtilization === 'number'
+        ? userData.creditUtilization
+        : (typeof userData.creditUtilization?.overall === 'number'
+            ? userData.creditUtilization.overall
+            : 0),
+      creditAge: userData.creditAge || 0,
+      creditMix: userData.creditMix || 0,
+      inquiries: (typeof userData.inquiries === 'number' && !isNaN(userData.inquiries))
+        ? userData.inquiries
+        : 0,
+      activeLoanCount: userData.activeLoanCount || 0,
+      monthlyIncome: userData.monthlyIncome || 0,
+      monthlyDebtPayments: (userData.totalDebt || 0) * 0.1 // Estimate monthly payments as 10% of total debt
+    };
+    // Calculate DTI consistently
+    const calculatedDti = (creditReport.monthlyIncome > 0 && creditReport.totalDebt) 
+      ? +(creditReport.totalDebt / creditReport.monthlyIncome).toFixed(4)
+      : 0;
+    
+    const scoreResult = calculateCreditScore(scoreInput);
+    
+    // Use the existing score from the database instead of recalculating
+    const existingScore = creditReport.creditScore?.fico?.score;
+    const existingClassification = creditReport.creditScore?.classification || 'Good';
+    
+    // Create a score result object using the existing score
+    const scoreResultForLending = {
+      ...scoreResult,
+      score: existingScore,
+      classification: existingClassification,
+      dti: calculatedDti
+    };
+    
+    // Ensure breakdown structure exists and update DTI
+    if (!scoreResultForLending.breakdown) scoreResultForLending.breakdown = {};
+    if (!scoreResultForLending.breakdown.componentRatings) {
+      scoreResultForLending.breakdown.componentRatings = {};
+    }
+    
+    // Update DTI component with consistent calculation
+    scoreResultForLending.breakdown.componentRatings.dti = {
+      value: calculatedDti, // Use decimal value directly
+      label: calculatedDti < 0.2 ? 'Excellent' : 
+             calculatedDti < 0.35 ? 'Good' : 
+             calculatedDti < 0.5 ? 'Fair' : 'Poor'
+    };
+    
+    // Use evaluateLendingDecision for proper data structure
+    const { evaluateLendingDecision } = await import('../utils/lendingDecision.js');
+    const userDataForLending = {
+      ...scoreInput,
+      onTimePaymentRate: userData.onTimePaymentRate || 1,
+      onTimeRateLast6Months: userData.onTimeRateLast6Months || 1,
+      loanTypeCounts: userData.loanTypeCounts || {},
+      missedPaymentsLast12: userData.missedPaymentsLast12 || 0,
+      recentLoanApplications: userData.recentLoanApplications || 0,
+      defaultCountLast3Years: userData.defaultCountLast3Years || 0,
+      consecutiveMissedPayments: userData.consecutiveMissedPayments || 0,
+      recentDefaults: userData.recentDefaults || 0,
+      monthsSinceLastDelinquency: userData.monthsSinceLastDelinquency || 999,
+      activeLoanCount: userData.activeLoanCount || 0,
+      monthlyIncome: userData.monthlyIncome || 0,
+      totalDebt: userData.totalDebt || 0,
+      employmentStatus: 'employed', // Default assumption
+      collateralValue: 0
+    };
+    
     let offer;
     try {
-      const calculator = new LoanCalculator(scoreData, userData);
-      offer = calculator.run();
+      offer = evaluateLendingDecision(scoreResultForLending, userDataForLending);
+      
+      // Ensure we use the classification from the existing score
+      offer.classification = existingClassification;
+      
+      // Map offer fields to expected frontend format
+      if (offer.offer) {
+        offer.maxLoanAmount = offer.offer.maxAmount || 0;
+        offer.suggestedInterestRate = offer.offer.interestRate || 0;
+      }
     } catch (calcError) {
       return res.status(200).json({ success: false, userId, error: 'Failed to evaluate lending decision', details: calcError.message });
     }
     res.json({ success: true, userId, offer, evaluatedAt: new Date() });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to evaluate lending decision', details: error.message });
+    res.status(500).json({ status: 'error', message: 'Failed to evaluate lending decision', details: error.message });
   }
 });
 
@@ -572,15 +701,12 @@ router.get('/quick-report/:userId', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching quick report:', error);
-    res.status(500).json({ 
-      error: 'Error fetching quick report',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Error fetching quick report', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
 // Get recent lending decisions
-router.get('/recent-decisions', auth, async (req, res) => {
+router.get('/recent-decisions', dashboardLimiter, auth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     // Get recent credit reports with user data
@@ -607,23 +733,33 @@ router.get('/recent-decisions', auth, async (req, res) => {
       { $limit: limit }
     ]);
 
-    // Add lendingDecision to each decision using LoanCalculator
-    const { LoanCalculator } = await import('../utils/LoanCalculator.js');
+    // Add lendingDecision to each decision using evaluateLendingDecision
+    const { evaluateLendingDecision } = await import('../utils/lendingDecision.js');
+    const { calculateCreditScore } = await import('../utils/creditScoring.js');
     const enhancedDecisions = await Promise.all(recentDecisions.map(async (report) => {
       try {
         const scoreInput = {
           paymentHistory: report.paymentHistory ?? 0,
-          creditUtilization: report.creditUtilization ?? 1,
+          creditUtilization: typeof report.creditUtilization === 'number'
+            ? report.creditUtilization
+            : (typeof report.creditUtilization?.overall === 'number'
+                ? report.creditUtilization.overall
+                : 1),
           creditAge: report.creditAge ?? 0,
           creditMix: report.creditMix ?? 0,
           inquiries: report.inquiries ?? 1,
           activeLoanCount: report.openAccounts ?? 0,
+          monthlyIncome: report.monthlyIncome ?? 0,
+          monthlyDebtPayments: (report.totalDebt ?? 0) * 0.1 // Estimate monthly payments as 10% of total debt
         };
-        const scoreData = {
-          score: report.creditScore?.fico?.score ?? 0,
-          classification: report.creditScore?.classification ?? 'Unknown',
-          version: 'v101',
-        };
+        
+        // Calculate credit score first
+        const scoreResult = calculateCreditScore({
+          ...scoreInput,
+          monthlyIncome: report.monthlyIncome ?? 0,
+          monthlyDebtPayments: (report.totalDebt ?? 0) * 0.1 // Estimate monthly payments as 10% of total debt
+        });
+        
         const userData = {
           ...scoreInput,
           onTimePaymentRate: report.onTimePaymentRate ?? 1,
@@ -638,12 +774,21 @@ router.get('/recent-decisions', auth, async (req, res) => {
           activeLoanCount: report.openAccounts ?? 0,
           monthlyIncome: report.monthlyIncome ?? 0,
           totalDebt: report.totalDebt ?? 0,
+          employmentStatus: 'employed', // Default assumption
+          collateralValue: 0
         };
-        const calculator = new LoanCalculator(scoreData, userData);
-        const lendingDecision = calculator.run();
-        lendingDecision.decision = lendingDecision.approved === true
-          ? 'Approve'
-          : (lendingDecision.approved === false ? 'Reject' : 'Review');
+        
+        const lendingDecision = evaluateLendingDecision(scoreResult, userDataForLending);
+        
+        // Ensure we use the classification from the calculated score
+        lendingDecision.classification = scoreResult.classification;
+        
+        // Map offer fields to expected frontend format
+        if (lendingDecision.offer) {
+          lendingDecision.maxLoanAmount = lendingDecision.offer.maxAmount || 0;
+          lendingDecision.suggestedInterestRate = lendingDecision.offer.interestRate || 0;
+        }
+        
         return { ...report, lendingDecision };
       } catch (err) {
         return { ...report, lendingDecision: { error: 'Failed to generate lending decision', details: err.message } };
@@ -659,18 +804,14 @@ router.get('/recent-decisions', auth, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching recent decisions:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Failed to fetch recent decisions',
-      error: error.message
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch recent decisions', error: error.message });
   }
 });
 
 // Save manual lending decision
 router.post('/save-decision/:userId', auth, async (req, res) => {
   const { userId } = req.params;
-  const { decision, notes, loanDetails, isManual } = req.body;
+  const { decision, notes, loanDetails, isManual, rejectionReason, flagForReview, reviewNote, riskTierOverride, overrideJustification } = req.body;
   
   try {
     // Validate user ID format
@@ -729,10 +870,15 @@ router.post('/save-decision/:userId', auth, async (req, res) => {
       isManual: isManual || false,
       manualNotes: notes || '',
       loanDetails: loanDetails || {},
+      rejectionReason: rejectionReason || '',
+      flagForReview: flagForReview || false,
+      reviewNote: reviewNote || '',
+      riskTierOverride: riskTierOverride || '',
+      overrideJustification: overrideJustification || '',
       evaluatedAt: new Date(),
       evaluatedBy: req.user.id,
-      maxLoanAmount: req.body.maxLoanAmount || 0,
-      suggestedInterestRate: req.body.suggestedInterestRate || 0,
+      maxLoanAmount: req.body.maxLoanAmount || loanDetails?.amount || 0,
+      suggestedInterestRate: req.body.suggestedInterestRate || loanDetails?.interestRate || 0,
       debtToIncomeRatio: req.body.debtToIncomeRatio || 0
     };
     creditReport.lendingDecision = newDecision;
@@ -740,6 +886,24 @@ router.post('/save-decision/:userId', auth, async (req, res) => {
     creditReport.lendingDecisionHistory = creditReport.lendingDecisionHistory || [];
     creditReport.lendingDecisionHistory.push(newDecision);
     await creditReport.save();
+
+    // Audit log: decision change
+    await SecurityLog.create({
+      adminId: req.user.id,
+      action: 'DECISION_CHANGE',
+      targetUserId: userId,
+      details: {
+        decision: newDecision.decision,
+        isManual: newDecision.isManual,
+        officer: req.user.id,
+        evaluatedAt: newDecision.evaluatedAt,
+        notes: newDecision.manualNotes || '',
+        loanDetails: newDecision.loanDetails || {},
+        rejectionReason: newDecision.rejectionReason || '',
+        flagForReview: newDecision.flagForReview || false
+      },
+      timestamp: new Date()
+    });
 
     res.json({
       success: true,
@@ -753,10 +917,7 @@ router.post('/save-decision/:userId', auth, async (req, res) => {
 
   } catch (error) {
     console.error('Error saving lending decision:', error);
-    res.status(500).json({
-      error: 'Failed to save lending decision',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+    res.status(500).json({ status: 'error', message: 'Failed to save lending decision', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
   }
 });
 
@@ -766,7 +927,7 @@ function escapeRegex(str) {
 }
 
 // Search borrowers by name, email, or phone (for lenders)
-router.get('/search-borrowers', auth, async (req, res) => {
+router.get('/search-borrowers', rateLimiter, auth, async (req, res) => {
   try {
     if (!['lender', 'admin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied', details: 'Only lenders and admins can search borrowers' });
@@ -828,7 +989,7 @@ router.get('/search-borrowers', auth, async (req, res) => {
     res.json({ success: true, data: borrowers });
   } catch (error) {
     console.error('Error searching borrowers:', error);
-    res.status(500).json({ error: 'Failed to search borrowers', details: error.message });
+    res.status(500).json({ status: 'error', message: 'Failed to search borrowers', details: error.message });
   }
 });
 

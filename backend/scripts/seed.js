@@ -1,3 +1,6 @@
+// IMPORTANT: Always set a valid bankId for every user created in this script.
+// This ensures bank-based access control is enforced in all environments.
+// See main app logic for valid bankId values.
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');

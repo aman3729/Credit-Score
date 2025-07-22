@@ -69,7 +69,7 @@ router.get('/settings', auth, requireAdmin, async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching security settings:', error);
-    res.status(500).json({ error: 'Failed to fetch security settings' });
+    res.status(500).json({ status: 'error', message: 'Failed to fetch security settings' });
   }
 });
 
@@ -96,7 +96,7 @@ router.post('/2fa/enable', auth, async (req, res) => {
       secret
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to enable 2FA' });
+    res.status(500).json({ status: 'error', message: 'Failed to enable 2FA' });
   }
 });
 
@@ -120,7 +120,7 @@ router.post('/2fa/verify', auth, async (req, res) => {
 
     res.json({ message: '2FA enabled successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to verify 2FA' });
+    res.status(500).json({ status: 'error', message: 'Failed to verify 2FA' });
   }
 });
 
@@ -145,7 +145,7 @@ router.post('/2fa/disable', auth, async (req, res) => {
 
     res.json({ message: '2FA disabled successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to disable 2FA' });
+    res.status(500).json({ status: 'error', message: 'Failed to disable 2FA' });
   }
 });
 
@@ -177,7 +177,7 @@ router.post('/password/reset-request', async (req, res) => {
 
     res.json({ message: 'Password reset email sent' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to process password reset request' });
+    res.status(500).json({ status: 'error', message: 'Failed to process password reset request' });
   }
 });
 
@@ -202,11 +202,12 @@ router.post('/password/reset', async (req, res) => {
     user.password = newPassword;
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
+    user.passwordChangedAt = Date.now();
     await user.save();
 
     res.json({ message: 'Password reset successful' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to reset password' });
+    res.status(500).json({ status: 'error', message: 'Failed to reset password' });
   }
 });
 
@@ -240,7 +241,7 @@ router.put('/notifications/preferences', auth, async (req, res) => {
       preferences: user.notificationPreferences
     });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to update notification preferences' });
+    res.status(500).json({ status: 'error', message: 'Failed to update notification preferences' });
   }
 });
 
@@ -270,7 +271,7 @@ router.post('/devices/register', auth, async (req, res) => {
     await user.save();
     res.json({ message: 'Device registered successfully' });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to register device' });
+    res.status(500).json({ status: 'error', message: 'Failed to register device' });
   }
 });
 

@@ -1,118 +1,308 @@
 /**
- * Lending Decision Engine (v2.0)
- * Integrated with new credit scoring engine
+ * Lending Decision Engine (v2.4)
+ * Enhanced with economic sensitivity, regulatory compliance, and risk management
  * 
- * @param {Object} scoreData - Result from calculateCreditScore
+ * Key Improvements:
+ * 1. Fixed collateral evaluation during recessions
+ * 2. Added comprehensive configuration fallbacks
+ * 3. Enhanced unemployment rejection logic
+ * 4. Improved rate ceiling enforcement
+ * 5. Configurable term selection fallbacks
+ * 
+ * @param {Object} scoreData - Result from calculateCreditScore (v2.1+)
  * @param {Object} userData - Financial and behavioral profile
  * @returns {Object} Lending decision and offer
+ * @throws {Error} If required data is missing or invalid
  */
+import { SCORE_CONFIG } from './creditScoring.js';
+
+// Adverse Action Code Registry (Regulatory Compliance)
+const ADVERSE_ACTION_CODES = {
+  INVALID_INCOME: 'AA101',
+  REGULATORY_REJECT: 'AA201',
+  UNEMPLOYED: 'AA202',
+  EXCESSIVE_APPLICATIONS: 'AA203',
+  NO_TERMS_AVAILABLE: 'AA301',
+  INSUFFICIENT_COLLATERAL: 'AA302'
+};
+
+// Default configuration fallbacks
+const DEFAULT_CONFIG = {
+  decisionMatrix: {
+    approveScore: 700,
+    conditionalApprove: { score: 650, maxDti: 0.45 },
+    reviewScore: 600
+  },
+  collateral: {
+    minValue: 5000,
+    qualityThreshold: 0.6,
+    recessionQualityThreshold: 0.7,
+    loanToValueRatio: 0.7,
+    requiredForHighRisk: true
+  },
+  recessionAdjustments: {
+    rateIncrease: 2.0,
+    maxAmountReduction: 0.85,
+    collateralDiscount: 0.8,
+    maxTerm: 36
+  },
+  incomeMultipliers: {
+    'Low Risk': 12,
+    'Medium Risk': 8,
+    'High Risk': 4,
+    default: 6
+  },
+  maxInterestRate: 35.99,
+  usuryCap: 35.99
+};
+
 export function evaluateLendingDecision(scoreData, userData) {
-  if (!scoreData || !scoreData.score || !userData) {
-    throw new Error('[Lending Decision] Missing scoreData or userData');
+  // Validate input data
+  if (!scoreData || typeof scoreData.score !== 'number' || !userData || typeof userData.monthlyIncome !== 'number') {
+    throw new Error('[Lending Decision] Missing or invalid scoreData or userData');
   }
 
-  // Extract scoring engine metadata
+  // Validate scoring data structure
+  if (!scoreData.breakdown?.componentRatings?.dti) {
+    console.warn('[Lending Decision] DTI component missing, flagging for manual review');
+    scoreData.breakdown = scoreData.breakdown || {};
+    scoreData.breakdown.componentRatings = scoreData.breakdown.componentRatings || {};
+    scoreData.breakdown.componentRatings.dti = {
+      value: null,
+      label: 'Manual Review'
+    };
+  }
+
+  // Extract scoring engine metadata with fallbacks
   const {
     score,
     classification,
-    version = 'v2.0',
+    version = 'v2.4',
     requiredDisclosures = [],
-    breakdown,
+    breakdown = {},
     recessionMode = false,
     aiEnabled = false
   } = scoreData;
 
-  // Extract financial data
+  // Merge configuration with defaults
+  const config = { ...DEFAULT_CONFIG, ...SCORE_CONFIG };
+  if (!config.riskTiers) {
+    console.error('[Lending Decision] Missing riskTiers in configuration, using fallback');
+    config.riskTiers = [
+      { minScore: 800, tier: 'A+', label: 'Exceptional', baseRate: 4.5, defaultRisk: '<2%' },
+      { minScore: 740, tier: 'A', label: 'Excellent', baseRate: 5.5, defaultRisk: '2-5%' },
+      { minScore: 680, tier: 'B', label: 'Good', baseRate: 8.0, defaultRisk: '5-10%' },
+      { minScore: 620, tier: 'C', label: 'Fair', baseRate: 12.0, defaultRisk: '10-20%' },
+      { minScore: 0, tier: 'D', label: 'High Risk', baseRate: 18.0, defaultRisk: '>20%' }
+    ];
+  }
+
+  // Extract financial data with safe defaults
   const {
     monthlyIncome = 0,
-    totalDebt = 0,
     employmentStatus = 'unknown',
     collateralValue = 0,
+    collateralQuality = 0,
     activeLoanCount = 0,
-    monthsSinceLastDelinquency = 'N/A'
+    monthsSinceLastDelinquency = 'N/A',
+    recentLoanApplications = 0,
+    consecutiveMissedPayments = 0,
+    alternativeIncome = 0
   } = userData;
+
+  // Validate monthly income
+  if (monthlyIncome <= 0 && alternativeIncome <= 0) {
+    return formatRejection(
+      scoreData,
+      userData,
+      ['Invalid or zero monthly income'],
+      requiredDisclosures,
+      version,
+      recessionMode,
+      aiEnabled,
+      employmentStatus,
+      activeLoanCount,
+      monthsSinceLastDelinquency,
+      0,
+      ADVERSE_ACTION_CODES.INVALID_INCOME
+    );
+  }
+
+  // Validate employment status
+  const validEmploymentStatuses = ['employed', 'self-employed', 'unemployed', 'retired', 'student', 'other'];
+  if (!validEmploymentStatuses.includes(employmentStatus)) {
+    console.warn(`[Lending Decision] Invalid employment status: ${employmentStatus}, defaulting to 'unknown'`);
+    userData.employmentStatus = 'unknown';
+  }
+
+  // Use DTI from scoring engine or flag for review
+  const dti = breakdown.componentRatings.dti?.value
+    ? breakdown.componentRatings.dti.value / 100
+    : null;
+  const dtiRating = breakdown.componentRatings.dti?.label || 'Unknown';
 
   // Initialize decision components
   let decision = 'Review';
   const reasons = [];
-  const riskFlags = [...requiredDisclosures];
-  const dti = monthlyIncome > 0 ? totalDebt / monthlyIncome : 0;
 
-  // 🚫 Hard rejection conditions (regulatory compliance)
+  // Hard rejection conditions (regulatory compliance)
   const hasHardReject = () => {
+    const rejectReasons = [];
+    const rejectionCodes = [];
+    
+    // Regulatory rejection conditions
     if (breakdown?.penalties?.defaultHistoryPenalty < -6) {
-      return ['Major default history'];
+      rejectReasons.push('Major default history');
+      rejectionCodes.push('REG-01');
     }
-    if (userData.monthsSinceLastDelinquency < 3) {
-      return ['Recent delinquency (<3 months)'];
+    if (monthsSinceLastDelinquency !== 'N/A' && monthsSinceLastDelinquency < 3) {
+      rejectReasons.push('Recent delinquency (<3 months)');
+      rejectionCodes.push('REG-02');
     }
-    if (userData.consecutiveMissedPayments >= 4) {
-      return ['Chronic payment delinquency'];
+    if (consecutiveMissedPayments >= 4) {
+      rejectReasons.push('Chronic payment delinquency');
+      rejectionCodes.push('REG-03');
     }
-    if (dti > 0.65) {
-      return ['Excessive debt burden (DTI >65%)'];
+    if (dti && dti > 0.65) {
+      rejectReasons.push('Excessive debt burden (DTI >65%)');
+      rejectionCodes.push('REG-04');
     }
-    return null;
+    if (dti === null) {
+      rejectReasons.push('Missing DTI data requires manual review');
+      rejectionCodes.push('REG-05');
+    }
+    
+    // Economic rejection conditions
+    if (employmentStatus === 'unemployed' && alternativeIncome <= 0) {
+      rejectReasons.push('Unemployment status without alternative income');
+      rejectionCodes.push(ADVERSE_ACTION_CODES.UNEMPLOYED);
+    }
+    if (recentLoanApplications > 5) {
+      rejectReasons.push('Excessive recent loan applications (>5)');
+      rejectionCodes.push(ADVERSE_ACTION_CODES.EXCESSIVE_APPLICATIONS);
+    }
+    
+    return rejectReasons.length ? { reasons: rejectReasons, codes: rejectionCodes } : null;
   };
 
   // Check for hard rejects
-  let rejectReasons;
-  if (rejectReasons = hasHardReject()) {
-    return formatRejection(scoreData, userData, rejectReasons, riskFlags, version, recessionMode, aiEnabled, employmentStatus, activeLoanCount, monthsSinceLastDelinquency);
+  const hardReject = hasHardReject();
+  if (hardReject) {
+    return formatRejection(
+      scoreData,
+      userData,
+      hardReject.reasons,
+      requiredDisclosures,
+      version,
+      recessionMode,
+      aiEnabled,
+      employmentStatus,
+      activeLoanCount,
+      monthsSinceLastDelinquency,
+      dti || 0,
+      hardReject.codes.join(',')
+    );
   }
 
-  // 🟡 Risk factor analysis
+  // Risk factor analysis
   const analyzeRiskFactors = () => {
     const factors = [];
-    
-    // Payment behavior
     const paymentRating = breakdown?.componentRatings?.paymentHistory?.label;
+    
+    // Payment behavior risks
     if (paymentRating === 'Fair' || paymentRating === 'Poor') {
-      factors.push('Suboptimal payment history');
-      riskFlags.push('PAYMENT_RISK');
+      factors.push(`Suboptimal payment history (${paymentRating})`);
     }
-
-    // Credit utilization
     if (breakdown?.componentRatings?.creditUtilization?.value > 40) {
-      factors.push('High credit utilization');
-      riskFlags.push('HIGH_UTILIZATION');
+      factors.push('High credit utilization (>40%)');
     }
-
-    // Recent applications
-    if (userData.recentLoanApplications > 3) {
+    if (recentLoanApplications > 2) {
       factors.push('Multiple recent applications');
-      riskFlags.push('APPLICATION_VELOCITY');
     }
-
-    // Employment status
+    
+    // Economic stability risks
     if (!['employed', 'self-employed'].includes(employmentStatus)) {
-      factors.push('Unstable employment status');
-      riskFlags.push('EMPLOYMENT_RISK');
+      factors.push('Non-traditional employment status');
     }
-
+    if (dtiRating === 'Fair' || dtiRating === 'Poor') {
+      factors.push(`DTI risk (${dtiRating})`);
+    }
+    
+    // Collateral quality risks
+    if (collateralValue > 0) {
+      const collateralThreshold = recessionMode 
+        ? config.collateral.recessionQualityThreshold 
+        : config.collateral.qualityThreshold;
+      
+      if (collateralQuality < collateralThreshold) {
+        factors.push(`Low collateral quality (${collateralQuality} < ${collateralThreshold})`);
+      }
+    }
+    
+    // Macroeconomic risks
+    if (recessionMode) {
+      factors.push('Economic recession conditions');
+    }
+    
     return factors;
   };
 
-  // 📊 Decision matrix
-  if (score >= 700) decision = 'Approve';
-  if (score >= 650 && dti <= 0.45) decision = 'Approve';
-  if (score < 600) decision = 'Review';
+  // Decision matrix with config fallbacks
+  const decisionMatrix = config.decisionMatrix || DEFAULT_CONFIG.decisionMatrix;
+  if (score >= decisionMatrix.approveScore) {
+    decision = 'Approve';
+  } else if (
+    score >= decisionMatrix.conditionalApprove.score &&
+    dti &&
+    dti <= decisionMatrix.conditionalApprove.maxDti
+  ) {
+    decision = 'Approve';
+  } else if (score < decisionMatrix.reviewScore) {
+    decision = 'Review';
+  }
 
   // Add risk factors to reasons
   reasons.push(...analyzeRiskFactors());
 
-  // 🏆 Risk tier classification
-  const riskTier = getRiskTier(score);
+  // Risk tier classification
+  const riskTier = getRiskTier(score, config);
   
-  // 💰 Dynamic pricing model
+  // Dynamic pricing model with usury cap
   const pricing = getRiskBasedPricing(riskTier, {
     dti,
+    dtiRating,
     recessionMode,
     paymentRating: breakdown?.componentRatings?.paymentHistory?.label
-  });
+  }, config);
+  
+  // Apply usury rate cap (regulatory compliance)
+  const maxAllowedRate = Math.min(
+    config.maxInterestRate || DEFAULT_CONFIG.maxInterestRate,
+    config.usuryCap || DEFAULT_CONFIG.usuryCap
+  );
+  pricing.finalRate = Math.min(pricing.finalRate, maxAllowedRate);
 
-  // 📦 Loan offer calculation
-  const offer = calculateLoanOffer(score, classification, pricing, userData);
+  // Loan offer calculation with economic adjustments
+  const offer = calculateLoanOffer(
+    score, 
+    classification, 
+    pricing, 
+    userData, 
+    dtiRating, 
+    riskTier,
+    recessionMode,
+    config
+  );
+  
+  // Handle no available terms scenario
+  if (offer.decision === 'Reject') {
+    return offer;
+  }
+  
+  // AI transparency
+  const aiExplanations = aiEnabled
+    ? ['AI model influenced risk tier based on historical data patterns']
+    : [];
 
   return {
     decision,
@@ -123,13 +313,17 @@ export function evaluateLendingDecision(scoreData, userData) {
     defaultRiskEstimate: riskTier.defaultRisk,
     engineVersion: version,
     reasons: reasons.length ? reasons : ['Favorable credit profile'],
-    riskFlags,
+    riskFlags: reasons, // Unified with reasons
     offer,
-    dti: +dti.toFixed(3),
+    maxLoanAmount: offer.maxAmount,
+    suggestedInterestRate: offer.interestRate,
+    dti: dti ? +dti.toFixed(3) : null,
+    dtiRating,
     timestamp: new Date().toISOString(),
     scoringDetails: {
       recessionMode,
-      aiEnabled
+      aiEnabled,
+      aiExplanations
     },
     customerProfile: {
       employmentStatus,
@@ -139,11 +333,23 @@ export function evaluateLendingDecision(scoreData, userData) {
   };
 }
 
-// 🆕 Helper functions
-function formatRejection(scoreData, userData, reasons, riskFlags, version, recessionMode, aiEnabled, employmentStatus, activeLoanCount, monthsSinceLastDelinquency) {
-  const { monthlyIncome = 0, totalDebt = 0 } = userData;
-  const dti = monthlyIncome > 0 ? totalDebt / monthlyIncome : 0;
-  
+/**
+ * Formats a rejection response with regulatory codes
+ */
+function formatRejection(
+  scoreData,
+  userData,
+  reasons,
+  riskFlags,
+  version,
+  recessionMode,
+  aiEnabled,
+  employmentStatus,
+  activeLoanCount,
+  monthsSinceLastDelinquency,
+  dti,
+  rejectionCode
+) {
   return {
     decision: 'Reject',
     score: scoreData.score,
@@ -151,146 +357,267 @@ function formatRejection(scoreData, userData, reasons, riskFlags, version, reces
     riskTier: 'High Risk',
     riskTierLabel: 'Not Eligible',
     defaultRiskEstimate: '>25%',
-    engineVersion: version || 'v2.0',
+    engineVersion: version,
     reasons,
-    riskFlags: [...riskFlags, ...(scoreData.requiredDisclosures || [])],
+    riskFlags: [...riskFlags, ...reasons],
     offer: {
       maxAmount: 0,
       availableTerms: [],
       interestRate: null,
+      apr: null,
+      totalInterest: null,
+      totalRepayment: null,
       samplePayment: null,
       sampleTerm: null,
+      maxTerm: null,
       collateralRequired: false,
       pricingModel: {
         baseRate: null,
         adjustments: {
           dtiAdjustment: null,
+          dtiRatingAdjustment: null,
           recessionAdjustment: null,
           paymentAdjustment: null
         },
         finalRate: null
       }
     },
-    dti: +dti.toFixed(3),
+    dti: dti ? +dti.toFixed(3) : null,
+    dtiRating: scoreData.breakdown?.componentRatings?.dti?.label || 'Unknown',
     timestamp: new Date().toISOString(),
     scoringDetails: {
       recessionMode,
-      aiEnabled
+      aiEnabled,
+      aiExplanations: aiEnabled ? ['AI model flagged high risk'] : []
     },
     customerProfile: {
       employmentStatus,
       activeLoans: activeLoanCount,
       lastDelinquency: monthsSinceLastDelinquency
     },
-    rejectionCode: 'REG-01'
+    rejectionCode,
+    adverseActionNotice: `Reasons: ${reasons.join('; ')} | Code: ${rejectionCode}`
   };
 }
 
-function getRiskTier(score) {
-  // Aligned with new scoring classifications
-  if (score >= 800) return { 
-    tier: 'Very Low Risk', 
-    label: 'Prime Plus', 
-    defaultRisk: '<1%' 
-  };
-  if (score >= 740) return { 
-    tier: 'Low Risk', 
-    label: 'Prime', 
-    defaultRisk: '1-3%' 
-  };
-  if (score >= 680) return { 
-    tier: 'Moderate Risk', 
-    label: 'Near Prime', 
-    defaultRisk: '4-7%' 
-  };
-  if (score >= 620) return { 
-    tier: 'Medium Risk', 
-    label: 'Acceptable', 
-    defaultRisk: '8-15%' 
-  };
-  return { 
-    tier: 'High Risk', 
-    label: 'Subprime', 
-    defaultRisk: '16-25%' 
-  };
+/**
+ * Determines risk tier based on credit score
+ */
+function getRiskTier(score, config) {
+  // Sort tiers by minScore descending for proper matching
+  const sortedTiers = [...config.riskTiers].sort((a, b) => b.minScore - a.minScore);
+  return sortedTiers.find(tier => score >= tier.minScore) || sortedTiers[sortedTiers.length - 1];
 }
 
-function getRiskBasedPricing(riskTier, factors) {
-  // Base rates
-  const baseRates = {
-    'Very Low Risk': 6.99,
-    'Low Risk': 8.99,
-    'Moderate Risk': 12.49,
-    'Medium Risk': 17.99,
-    'High Risk': 24.99
+/**
+ * Calculates risk-based pricing with economic adjustments
+ */
+function getRiskBasedPricing(riskTier, factors, config) {
+  let rate = riskTier.baseRate;
+  const adjustments = {
+    dtiAdjustment: 0,
+    dtiRatingAdjustment: 0,
+    recessionAdjustment: 0,
+    paymentAdjustment: 0
   };
 
-  let rate = baseRates[riskTier.tier];
+  // DTI-based adjustments
+  if (factors.dti && factors.dti > 0.4) {
+    adjustments.dtiAdjustment = 1.5;
+    rate += 1.5;
+  }
   
-  // Adjustments
-  if (factors.dti > 0.4) rate += 1.5;
-  if (factors.recessionMode) rate += 0.75;
-  if (factors.paymentRating === 'Fair') rate += 2.0;
-  if (factors.paymentRating === 'Poor') rate += 4.0;
+  // Recession premium
+  if (factors.recessionMode) {
+    const recessionConfig = config.recessionAdjustments || DEFAULT_CONFIG.recessionAdjustments;
+    adjustments.recessionAdjustment = recessionConfig.rateIncrease;
+    rate += recessionConfig.rateIncrease;
+  }
   
+  // Payment history adjustments
+  if (factors.paymentRating === 'Fair') {
+    adjustments.paymentAdjustment = 2.0;
+    rate += 2.0;
+  } else if (factors.paymentRating === 'Poor') {
+    adjustments.paymentAdjustment = 4.0;
+    rate += 4.0;
+  }
+  
+  // DTI rating adjustments
+  if (factors.dtiRating === 'Fair') {
+    adjustments.dtiRatingAdjustment = 1.5;
+    rate += 1.5;
+  } else if (factors.dtiRating === 'Poor') {
+    adjustments.dtiRatingAdjustment = 3.0;
+    rate += 3.0;
+  }
+
   return {
-    baseRate: baseRates[riskTier.tier],
-    adjustments: {
-      dtiAdjustment: factors.dti > 0.4 ? 1.5 : 0,
-      recessionAdjustment: factors.recessionMode ? 0.75 : 0,
-      paymentAdjustment: factors.paymentRating === 'Fair' ? 2.0 : 
-                         factors.paymentRating === 'Poor' ? 4.0 : 0
-    },
-    finalRate: Math.min(rate, 35.99)
+    baseRate: riskTier.baseRate,
+    adjustments,
+    finalRate: Math.min(rate, config.maxInterestRate || DEFAULT_CONFIG.maxInterestRate)
   };
 }
 
-function calculateLoanOffer(score, classification, pricing, userData) {
-  // Base amounts by classification
-  const baseAmounts = {
-    'Excellent': 100000,
-    'Very Good': 75000,
-    'Good': 50000,
-    'Fair': 25000,
-    'Poor': 10000
-  };
+/**
+ * Calculates loan offer with economic sensitivity
+ */
+function calculateLoanOffer(
+  score, 
+  classification, 
+  pricing, 
+  userData, 
+  dtiRating, 
+  riskTier,
+  recessionMode,
+  config
+) {
+  // Fallback for unknown classifications
+  const baseAmounts = config.baseAmounts || DEFAULT_CONFIG.baseAmounts;
+  if (!baseAmounts[classification]) {
+    console.warn(`[Lending Decision] Unknown classification: ${classification}, using 'Good' as fallback`);
+    classification = 'Good';
+  }
 
-  // Income-based multiplier (max 2x monthly income)
-  const incomeMultiplier = Math.min(
-    2.0, 
-    (userData.monthlyIncome > 0 ? 
-      (baseAmounts[classification] / (userData.monthlyIncome * 3)) : 1.0)
+  // Get risk-based income multiplier
+  const incomeMultipliers = config.incomeMultipliers || DEFAULT_CONFIG.incomeMultipliers;
+  const incomeMultiplier = incomeMultipliers[riskTier.tier] || 
+    incomeMultipliers.default || 
+    8; // Conservative default
+
+  // Calculate max amount based on income
+  const effectiveIncome = Math.max(userData.monthlyIncome, userData.alternativeIncome || 0);
+  let maxAmount = Math.min(
+    baseAmounts[classification],
+    effectiveIncome * incomeMultiplier
   );
 
-  // Calculate max amount
-  let maxAmount = baseAmounts[classification] * incomeMultiplier;
-  
-  // Collateral boost
+  // Apply recession mode reduction
+  if (recessionMode) {
+    const reductionFactor = config.recessionAdjustments?.maxAmountReduction || 0.85;
+    maxAmount *= reductionFactor;
+  }
+
+  // Collateral adjustments with recession discounting
+  let collateralRequired = false;
   if (userData.collateralValue > 0) {
-    maxAmount = Math.max(
-      maxAmount, 
-      userData.collateralValue * 0.7
+    const collateralConfig = config.collateral || DEFAULT_CONFIG.collateral;
+    let effectiveCollateralValue = userData.collateralValue;
+    
+    // Discount collateral during recessions
+    if (recessionMode) {
+      const discountFactor = config.recessionAdjustments?.collateralDiscount || 0.8;
+      effectiveCollateralValue *= discountFactor;
+    }
+    
+    if (
+      effectiveCollateralValue >= collateralConfig.minValue && 
+      userData.collateralQuality >= (recessionMode 
+        ? collateralConfig.recessionQualityThreshold 
+        : collateralConfig.qualityThreshold)
+    ) {
+      const collateralBasedAmount = effectiveCollateralValue * collateralConfig.loanToValueRatio;
+      maxAmount = Math.max(maxAmount, collateralBasedAmount);
+      collateralRequired = riskTier.tier === 'High Risk' && collateralConfig.requiredForHighRisk;
+    }
+  }
+
+  // Term options based on credit profile
+  const termOptions = getAvailableTerms(score, dtiRating, recessionMode, config);
+  if (!termOptions.length) {
+    return formatRejection(
+      { 
+        score, 
+        classification, 
+        breakdown: { 
+          componentRatings: { dti: { label: dtiRating } } 
+        } 
+      },
+      userData,
+      ['No available loan terms'],
+      [],
+      'v2.4',
+      recessionMode,
+      false,
+      userData.employmentStatus,
+      userData.activeLoanCount,
+      userData.monthsSinceLastDelinquency,
+      null,
+      ADVERSE_ACTION_CODES.NO_TERMS_AVAILABLE
     );
   }
 
-  // Term options based on risk
-  const termOptions = score > 700 ? [24, 36, 48, 60] : 
-                      score > 650 ? [24, 36, 48] : 
-                      [12, 24, 36];
+  // Select maximum term
+  const maxTerm = Math.max(...termOptions);
+  const roundedMaxAmount = Math.max(0, Math.round(maxAmount));
+  const sampleTerm = maxTerm;
 
-  // Calculate sample payment (for 36 months)
-  const sampleTerm = 36;
-  const monthlyPayment = pricing.finalRate > 0 ? 
-    (maxAmount * (pricing.finalRate / 100 / 12)) /
-    (1 - Math.pow(1 + (pricing.finalRate / 100 / 12), -sampleTerm)) : 0;
+  // Calculate monthly payment
+  let monthlyPayment;
+  if (pricing.finalRate === 0) {
+    monthlyPayment = roundedMaxAmount / sampleTerm;
+  } else {
+    const monthlyRate = pricing.finalRate / 100 / 12;
+    monthlyPayment = (roundedMaxAmount * monthlyRate) / 
+      (1 - Math.pow(1 + monthlyRate, -sampleTerm));
+  }
+
+  const roundedMonthly = Math.round(monthlyPayment);
+  const totalRepayment = roundedMonthly * sampleTerm;
+  const totalInterest = totalRepayment - roundedMaxAmount;
+  const apr = pricing.finalRate;
 
   return {
-    maxAmount: Math.round(maxAmount),
+    maxAmount: roundedMaxAmount,
     availableTerms: termOptions,
     interestRate: +pricing.finalRate.toFixed(2),
-    samplePayment: Math.round(monthlyPayment),
+    apr: +apr.toFixed(2),
+    totalInterest: +totalInterest.toFixed(2),
+    totalRepayment: +totalRepayment.toFixed(2),
+    samplePayment: roundedMonthly,
     sampleTerm,
-    collateralRequired: userData.collateralValue > 0,
-    pricingModel: pricing
+    maxTerm,
+    collateralRequired,
+    pricingModel: pricing,
+    term: sampleTerm,
+    monthlyPayment: roundedMonthly
   };
+}
+
+/**
+ * Determines available loan terms with economic sensitivity
+ */
+function getAvailableTerms(score, dtiRating, recessionMode, config) {
+  // Base terms by credit tier
+  const baseTerms = config.termOptions || {
+    excellent: [12, 24, 36, 48, 60, 72],
+    great: [12, 24, 36, 48, 60],
+    good: [12, 24, 36, 48],
+    fair: [12, 24, 36],
+    poor: [12, 24]
+  };
+
+  // Select base terms by score
+  let termOptions;
+  if (score >= 800) termOptions = [...baseTerms.excellent];
+  else if (score >= 740) termOptions = [...baseTerms.great];
+  else if (score >= 680) termOptions = [...baseTerms.good];
+  else if (score >= 620) termOptions = [...baseTerms.fair];
+  else termOptions = [...baseTerms.poor];
+
+  // DTI-based restrictions
+  if (dtiRating === 'Poor') {
+    termOptions = termOptions.filter(term => term <= 24);
+  } else if (dtiRating === 'Fair') {
+    termOptions = termOptions.filter(term => term <= 36);
+  }
+
+  // Recession restrictions
+  if (recessionMode) {
+    const recessionConfig = config.recessionAdjustments || DEFAULT_CONFIG.recessionAdjustments;
+    const maxTerm = recessionConfig.maxTerm || 36;
+    termOptions = termOptions.filter(term => term <= maxTerm);
+  }
+
+  return termOptions.length > 0 ? termOptions : [];
 }

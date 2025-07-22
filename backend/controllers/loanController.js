@@ -1,6 +1,7 @@
 import CreditReport from '../models/CreditReport.js';
 import { validationResult } from 'express-validator';
 import { evaluateLendingDecision } from '../utils/lendingDecision.js';
+import AppError from '../utils/appError.js';
 
 /**
  * Calculate monthly payment for a loan
@@ -24,7 +25,7 @@ const makeLoanDecision = async (req, res) => {
   // Validate request
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+    return next(new AppError('Validation failed', 400, { errors: errors.array() }));
   }
 
   const { borrowerId, loanAmount, loanTerm, interestRate, useAI = false } = req.body;
@@ -34,10 +35,7 @@ const makeLoanDecision = async (req, res) => {
     const creditData = await CreditReport.findOne({ userId: borrowerId });
     
     if (!creditData) {
-      return res.status(404).json({ 
-        success: false,
-        error: 'Credit data not found for this user' 
-      });
+      return next(new AppError('Credit data not found for this user', 404));
     }
 
     // Extract scoreData and userData for the lending decision engine
@@ -58,6 +56,19 @@ const makeLoanDecision = async (req, res) => {
 
     // Use the lending decision engine
     const decision = evaluateLendingDecision(scoreData, userData);
+
+    // Map approvedAmount to maxLoanAmount for frontend compatibility
+    if (decision.offer?.maxAmount) {
+      decision.maxLoanAmount = decision.offer.maxAmount;
+    } else if (decision.approvedAmount) {
+      decision.maxLoanAmount = decision.approvedAmount;
+    } else if (decision.approved === false) {
+      // For rejected loans, set maxLoanAmount to 0
+      decision.maxLoanAmount = 0;
+    } else {
+      // Fallback for any other case
+      decision.maxLoanAmount = 0;
+    }
 
     // Prepare response using the engine's recommendation
     const response = {
@@ -86,12 +97,10 @@ const makeLoanDecision = async (req, res) => {
 
   } catch (error) {
     console.error('Loan decision error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Server error during loan decision processing',
-      details: error.message
-    });
+    next(new AppError('Server error during loan decision processing', 500, { details: error.message }));
   }
 };
 
-export { makeLoanDecision };
+export {
+  makeLoanDecision
+};

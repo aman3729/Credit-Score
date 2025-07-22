@@ -1,5 +1,6 @@
 import { generateAIScore } from '../utils/gptScoring.js';
 import { calculateCreditScore as calculateScore } from '../utils/creditScoring.js';
+import { calculateCreditworthiness } from '../utils/newScoringEngine.js';
 import { evaluateLendingDecision } from '../utils/lendingDecision.js';
 import CreditReport from '../models/CreditReport.js';
 import CreditScore from '../models/CreditScore.js';
@@ -33,64 +34,68 @@ const calculateScoreChange = (currentScore, previousScore) => {
  * @access  Private
  */
 const calculateCreditScore = catchAsync(async (req, res, next) => {
-  const { paymentHistory, creditUtilization, creditAge, creditMix, inquiries } = req.body;
-  const useAI = req.query.aiEnabled === 'true';
-  
-  // Validate required fields
-  const requiredFields = { paymentHistory, creditUtilization, creditAge, creditMix, inquiries };
-  const missingFields = Object.entries(requiredFields)
-    .filter(([_, value]) => value === undefined)
-    .map(([key]) => key);
-    
-  if (missingFields.length > 0) {
-    return next(new AppError(`Missing required credit factors: ${missingFields.join(', ')}`, 400));
-  }
-  
-  let result;
-  
-  try {
-    if (useAI) {
-      // Use AI scoring if enabled
-      result = await generateAIScore({
-        paymentHistory,
-        creditUtilization,
-        creditAge,
-        creditMix,
-        inquiries
-      });
-    } else {
-      // Use manual scoring
-      const score = calculateScore({
-        paymentHistory,
-        creditUtilization,
-        creditAge,
-        creditMix,
-        inquiries
-      });
-      
-      result = {
-        score,
-        summary: 'Manual scoring completed',
-        ai: false,
-        category: getCreditScoreCategory(score),
-        factors: {
-          paymentHistory,
-          creditUtilization,
-          creditAge,
-          creditMix,
-          inquiries
-        }
-      };
+  const { engine } = req.query;
+  const creditData = req.body;
+
+  // Validate required fields for the default engine if no other engine is specified
+  if (!engine) {
+    const requiredFields = {
+      paymentHistory: creditData.paymentHistory,
+      creditUtilization: creditData.creditUtilization,
+      creditAge: creditData.creditAge,
+      creditMix: creditData.creditMix,
+      inquiries: creditData.inquiries
+    };
+    const missingFields = Object.entries(requiredFields)
+      .filter(([_, value]) => value === undefined)
+      .map(([key]) => key);
+
+    if (missingFields.length > 0) {
+      return next(new AppError(`Missing required credit factors for default engine: ${missingFields.join(', ')}`, 400));
     }
-    
+  }
+
+  let result;
+
+  try {
+    switch (engine) {
+      case 'ai':
+        result = await generateAIScore(creditData);
+        result.engine = 'ai';
+        result.engineVersion = result.version || null;
+        break;
+      case 'creditworthiness':
+        result = calculateCreditworthiness(creditData);
+        // The new engine returns a different structure, so we adapt it.
+        result = {
+          score: result.totalScore,
+          ...result
+        };
+        result.engine = 'creditworthiness';
+        result.engineVersion = result.version || null;
+        break;
+      default:
+        const score = calculateScore(creditData);
+        result = {
+          score,
+          summary: 'Manual scoring completed',
+          ai: false,
+          category: getCreditScoreCategory(score),
+          factors: creditData
+        };
+        result.engine = 'default';
+        result.engineVersion = null;
+        break;
+    }
+
     // Log the calculation
     logger.info('Credit score calculated', {
       userId: req.user?.id,
       score: result.score,
-      method: useAI ? 'AI' : 'Manual',
-      factors: result.factors || {}
+      method: engine || 'manual',
+      factors: result.factors || creditData || {}
     });
-    
+
     res.status(200).json({
       status: 'success',
       data: result
@@ -99,9 +104,10 @@ const calculateCreditScore = catchAsync(async (req, res, next) => {
     logger.error('Error calculating credit score', {
       error: error.message,
       stack: error.stack,
-      userId: req.user?.id
+      userId: req.user?.id,
+      engine
     });
-    
+
     return next(new AppError('Failed to calculate credit score. Please try again later.', 500));
   }
 });
@@ -164,7 +170,10 @@ const saveCreditScore = catchAsync(async (req, res, next) => {
     userId: req.user.id,
     creditScore: { fico: { score } },
     creditAge: factors?.creditAge ?? req.body.creditAge ?? req.user.creditAge ?? 0,
-    creditUtilization: factors?.creditUtilization ?? req.body.creditUtilization ?? req.user.creditUtilization ?? 0,
+    creditUtilization: {
+      overall: factors?.creditUtilization ?? req.body.creditUtilization ?? req.user.creditUtilization ?? 0,
+      byAccount: []
+    },
     totalDebt: factors?.totalDebt ?? req.body.totalDebt ?? req.user.totalDebt ?? 0,
     paymentHistory: factors?.paymentHistory ?? req.body.paymentHistory ?? req.user.paymentHistory ?? 0,
     creditMix: factors?.creditMix ?? req.body.creditMix ?? req.user.creditMix ?? 0,
@@ -244,7 +253,7 @@ const getCreditReport = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
   
   // Find the user to verify they exist
-  const user = await User.findById(userId).select('firstName lastName email');
+  const user = await User.findById(userId).select('firstName lastName email bankId');
   if (!user) {
     return next(new AppError('User not found', 404));
   }
@@ -252,6 +261,11 @@ const getCreditReport = catchAsync(async (req, res, next) => {
   // Check if the requesting user has permission
   if (req.user.role !== 'admin' && req.user.id !== userId) {
     return next(new AppError('Not authorized to access this credit report', 403));
+  }
+
+  // Restrict lender access to only their bank's users
+  if (req.user.role === 'lender' && user.bankId !== req.user.bankId) {
+    return next(new AppError('You do not have permission to access this credit report', 403));
   }
 
   // Try to find existing credit report
@@ -424,6 +438,17 @@ const getAllCreditReports = catchAsync(async (req, res, next) => {
     query['creditScore.fico.score'].$lte = parseInt(req.query.maxScore, 10);
   }
   
+  // Restrict lender access to only their bank's users
+  let userBankFilter = {};
+  if (req.user.role === 'lender') {
+    userBankFilter.bankId = req.user.bankId;
+  }
+  if (Object.keys(userBankFilter).length > 0) {
+    const users = await User.find(userBankFilter).select('_id');
+    const userIds = users.map(u => u._id);
+    query.userId = { $in: userIds };
+  }
+
   // 4) Execute count and find queries in parallel
   const [total, reports] = await Promise.all([
     CreditReport.countDocuments(query),
@@ -435,11 +460,11 @@ const getAllCreditReports = catchAsync(async (req, res, next) => {
   ]);
   
   // 5) Get user details for each report
-  const userIds = reports.map(r => r.userId).filter(Boolean);
+  const reportUserIds = reports.map(r => r.userId).filter(Boolean);
   let users = [];
   
-  if (userIds.length > 0) {
-    users = await User.find({ _id: { $in: userIds } })
+  if (reportUserIds.length > 0) {
+    users = await User.find({ _id: { $in: reportUserIds } })
       .select('email firstName lastName role')
       .lean();
   }
@@ -486,8 +511,13 @@ const getCreditScoreHistory = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
   const requestingUserId = req.user.id;
   
-  // Check if the requesting user has permission
-  if (req.user.role !== 'admin' && requestingUserId !== userId) {
+  // Restrict lender access to only their bank's users
+  if (req.user.role === 'lender') {
+    const user = await User.findById(userId).select('bankId');
+    if (!user || user.bankId !== req.user.bankId) {
+      return next(new AppError('You do not have permission to access this user\'s credit score history', 403));
+    }
+  } else if (req.user.role !== 'admin' && requestingUserId !== userId) {
     return next(new AppError('Not authorized to access this credit score history', 403));
   }
   

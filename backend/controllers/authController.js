@@ -20,13 +20,14 @@ const createSendToken = (user, statusCode, req, res) => {
   const token = signToken(user._id);
   
   // Set cookie options
+  const isProduction = process.env.NODE_ENV === 'production';
   const cookieOptions = {
     expires: new Date(
       Date.now() + process.env.JWT_COOKIE_EXPIRES_IN * 24 * 60 * 60 * 1000
     ),
     httpOnly: true,
-    secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
-    sameSite: 'strict',
+    secure: isProduction, // Only secure in production
+    sameSite: isProduction ? 'strict' : 'lax', // Lax for dev, strict for prod
   };
 
   // Set cookie
@@ -37,7 +38,6 @@ const createSendToken = (user, statusCode, req, res) => {
 
   res.status(statusCode).json({
     status: 'success',
-    token,
     data: {
       user,
     },
@@ -59,6 +59,19 @@ const signup = catchAsync(async (req, res, next) => {
     return next(new AppError('Username already in use', 400));
   }
 
+  // Validate bankId
+  const validBankIds = [
+    'CBE', 'DBE', 'AWASH', 'DASHEN', 'ABYSSINIA', 'WEGAGEN', 'NIB', 'HIBRET', 'LION', 'COOP',
+    'ZEMEN', 'OROMIA', 'BUNNA', 'BERHAN', 'ABAY', 'ADDIS', 'DEBUB', 'ENAT', 'GADAA', 'HIJRA',
+    'SHABELLE', 'SIINQEE', 'TSEHAY', 'AMHARA', 'AHADU', 'GOH', 'AMAN'
+  ];
+  if (!req.body.bankId || typeof req.body.bankId !== 'string' || !validBankIds.includes(req.body.bankId)) {
+    console.error('[Signup] Invalid or missing bankId:', req.body.bankId, 'Payload:', req.body);
+    return next(new AppError('A valid bankId is required for registration', 400));
+  }
+
+  // Log for debugging
+  console.log('[Signup] About to call userService.create with:', req.body);
   // 2) Hash password
   const hashedPassword = await bcrypt.hash(req.body.password, 12);
 
@@ -74,10 +87,13 @@ const signup = catchAsync(async (req, res, next) => {
       status: 'pending',
       emailVerified: false,
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      bankId: req.body.bankId // <-- Ensure this is present
+      // Add any other required fields here
     });
+    console.log('[Signup] userService.create succeeded:', newUser);
   } catch (error) {
-    console.log('User creation error:', error);
+    console.error('[Signup] User creation error:', error, 'Payload:', req.body);
     return next(new AppError(error.message, 400));
   }
 
@@ -161,6 +177,8 @@ const logout = (req, res) => {
   res.cookie('jwt', 'loggedout', {
     expires: new Date(Date.now() + 10 * 1000),
     httpOnly: true,
+    secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+    sameSite: 'strict',
   });
   
   securityLogger.info('User logged out', {

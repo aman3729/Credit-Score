@@ -1,4 +1,5 @@
-import dotenv from 'dotenv';
+console.log('SERVER STARTED');
+import './loadEnv.js';
 import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
@@ -15,21 +16,13 @@ import { createTerminus } from '@godaddy/terminus';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import lenderRoutes from './routes/lender.js';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { connectDB, closeDB } from './config/db.js';
 import { logger } from './config/logger.js';
 import { initAdmin } from './scripts/init-admin.js';
 import User from './models/User.js';
-
-// Configure environment variables FIRST
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-dotenv.config({ path: path.join(__dirname, '.env') });
-console.log('DEBUG: MONGODB_URI from process.env:', process.env.MONGODB_URI);
-console.log('DEBUG: Current working directory:', process.cwd());
-console.log('DEBUG: .env file path:', path.join(__dirname, '.env'));
+import csurf from 'csurf';
+import AppError from './utils/appError.js';
+import { errorHandler } from './middleware/error.js';
 
 // Initialize express app and server
 const app = express();
@@ -39,7 +32,10 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 const API_PREFIX = '/api/v1';
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set in environment variables');
+}
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
 // Handle uncaught exceptions
@@ -73,8 +69,10 @@ io.on('connection', (socket) => {
 });
 
 // CORS Configuration
+// IMPORTANT: In production, lock down CORS to only trusted origins via CORS_ORIGINS env variable
+const allowedDevOrigin = 'http://localhost:5177'; // <-- Vite dev server
 const corsOptions = {
-  origin: NODE_ENV === 'development' ? '*' : process.env.CORS_ORIGINS?.split(',') || '*',
+  origin: NODE_ENV === 'development' ? allowedDevOrigin : process.env.CORS_ORIGINS?.split(',') || '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
@@ -97,9 +95,30 @@ app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser());
+app.use((req, res, next) => {
+  console.log('Global cookies:', req.cookies);
+  next();
+});
 app.use(mongoSanitize());
 app.use(xss());
 app.use(hpp());
+
+// CSRF protection middleware (cookie-based)
+const csrfProtection = csurf({
+  cookie: {
+    httpOnly: false, // Must be readable by frontend JS
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+  },
+});
+
+// Add CSRF protection to all state-changing routes
+app.use(csrfProtection);
+
+// Endpoint to get CSRF token
+app.get('/api/v1/csrf-token', (req, res) => {
+  res.json({ csrfToken: req.csrfToken() });
+});
 
 // Rate Limiting
 const limiter = rateLimit({
@@ -132,6 +151,7 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import adminRoutes from './routes/admin.js';
 import debugRoutes from './routes/debugRoutes.js';
 import uploadHistoryRoutes from './routes/uploadHistoryRoutes.js';
+import schemaMappingRoutes from './routes/schemaMappingRoutes.js';
 import CreditScore from './models/CreditScore.js';
 
 // Mount routes
@@ -143,6 +163,7 @@ app.use(`${API_PREFIX}/admin`, adminRoutes);
 app.use(`${API_PREFIX}/debug`, debugRoutes);
 app.use(`${API_PREFIX}/upload-history`, uploadHistoryRoutes);
 app.use(`${API_PREFIX}/lenders`, lenderRoutes);
+app.use(`${API_PREFIX}/schema-mapping`, schemaMappingRoutes);
 
 // Basic routes
 app.get('/', (req, res) => {
@@ -160,28 +181,30 @@ app.get(`${API_PREFIX}/health`, (req, res) => {
 
 // Middleware for protected routes
 const protect = async (req, res, next) => {
+  console.log('Protect middleware cookies:', req.cookies); // Debug log
+  console.log('Checking for jwt:', req.cookies.jwt); // Debug log
   let token;
   
-  if (req.cookies.token) {
-    token = req.cookies.token;
+  if (req.cookies.jwt) {
+    token = req.cookies.jwt;
   } else if (req.headers.authorization?.startsWith('Bearer')) {
     token = req.headers.authorization.split(' ')[1];
   }
 
   if (!token) {
-    return res.status(401).json({ message: 'Authorization token required' });
+    return next(new AppError('Authorization token required', 401));
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = await User.findById(decoded.id).select('-password');
     if (!req.user) {
-      return res.status(401).json({ message: 'User not found' });
+      return next(new AppError('User not found', 401));
     }
     next();
   } catch (error) {
     logger.error('Authentication error:', error);
-    res.status(401).json({ message: 'Invalid or expired token' });
+    next(new AppError('Invalid or expired token', 401));
   }
 };
 
@@ -189,12 +212,12 @@ const admin = (req, res, next) => {
   if (req.user?.role === 'admin') {
     next();
   } else {
-    res.status(403).json({ message: 'Admin privileges required' });
+    next(new AppError('Admin privileges required', 403));
   }
 };
 
 // Credit Data Endpoint
-app.get(`${API_PREFIX}/users/:identifier/credit-data`, protect, async (req, res) => {
+app.get(`${API_PREFIX}/users/:identifier/credit-data`, protect, async (req, res, next) => {
   try {
     const { identifier } = req.params;
     
@@ -212,19 +235,12 @@ app.get(`${API_PREFIX}/users/:identifier/credit-data`, protect, async (req, res)
     }
 
     if (!user) {
-      return res.status(404).json({ 
-        status: 'fail',
-        message: 'User not found',
-        identifier
-      });
+      return next(new AppError('User not found', 404));
     }
 
     // Check authorization
     if (req.user.role !== 'admin' && req.user._id.toString() !== user._id.toString()) {
-      return res.status(403).json({ 
-        status: 'fail',
-        message: 'Unauthorized access'
-      });
+      return next(new AppError('Unauthorized access', 403));
     }
 
     // Find credit scores for the user
@@ -233,12 +249,7 @@ app.get(`${API_PREFIX}/users/:identifier/credit-data`, protect, async (req, res)
       .limit(12);
 
     if (creditScores.length === 0) {
-      return res.status(404).json({ 
-        message: 'No credit data available',
-        user: { _id: user._id, name: user.name, email: user.email },
-        creditScores: [],
-        factors: []
-      });
+      return next(new AppError('No credit data available', 404));
     }
 
     // Prepare response
@@ -263,10 +274,7 @@ app.get(`${API_PREFIX}/users/:identifier/credit-data`, protect, async (req, res)
     res.json(response);
   } catch (error) {
     logger.error('Credit data error:', error);
-    res.status(500).json({ 
-      message: 'Server error',
-      error: NODE_ENV === 'development' ? error.message : undefined
-    });
+    next(new AppError('Server error', 500));
   }
 });
 
@@ -312,17 +320,11 @@ const startServer = async () => {
 
 // Error Handling
 app.use((req, res) => {
-  res.status(404).json({ status: 'fail', message: `Route ${req.originalUrl} not found` });
+  res.status(404).json({ status: 'error', message: `Route ${req.originalUrl} not found` });
 });
 
-app.use((err, req, res, next) => {
-  logger.error('Server error:', err);
-  res.status(500).json({
-    status: 'error',
-    message: 'Internal server error',
-    ...(NODE_ENV === 'development' && { error: err.message })
-  });
-});
+// NOTE: This project uses both session-based and JWT-based authentication. Document which routes use which method and ensure all sensitive routes are protected by the correct middleware.
+app.use(errorHandler);
 
 // Graceful Shutdown
 createTerminus(server, {
@@ -336,7 +338,11 @@ createTerminus(server, {
   logger: (msg, err) => logger.error(msg, err)
 });
 
-// Start the server
-startServer();
+// Start the server only if not in test mode
+if (process.env.NODE_ENV !== 'test') {
+  startServer();
+}
 
-export { app, server };
+// SECURITY: Add npm audit to your CI/CD pipeline to catch vulnerable dependencies.
+
+export default app;

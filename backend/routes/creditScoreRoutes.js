@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, authorize } from '../middleware/auth.js';
+import { protect, authorize, requireValidConsent } from '../middleware/auth.js';
 import CreditScore from '../models/CreditScore.js';
 import User from '../models/User.js';
 import { 
@@ -16,6 +16,8 @@ import catchAsync from '../utils/catchAsync.js';
 import AppError from '../utils/appError.js';
 import { generateReasoning, generateScoreBreakdownReasoning, generateLendingReasoning, generateImprovementSuggestions } from '../utils/reasoningEngine.js';
 import LoanDecision from '../models/LoanDecision.js';
+import { evaluateLendingDecision } from '../utils/lendingDecision.js';
+import SecurityLog from '../models/SecurityLog.js';
 
 const router = express.Router();
 
@@ -131,7 +133,7 @@ router.post('/improvement-suggestions', protect, catchAsync(async (req, res, nex
  * @route   GET /api/v1/credit-scores/:userId
  * @access  Private
  */
-router.get('/:userId', protect, catchAsync(async (req, res, next) => {
+router.get('/:userId', protect, requireValidConsent, catchAsync(async (req, res, next) => {
   const { userId } = req.params;
   
   // Check if the user is authorized to access this data
@@ -176,6 +178,20 @@ router.get('/:userId', protect, catchAsync(async (req, res, next) => {
   };
 
   res.json(response);
+
+  // Audit log: score view
+  if (req.user && req.user.id !== userId) {
+    await SecurityLog.create({
+      adminId: req.user.id,
+      action: 'SCORE_VIEW',
+      targetUserId: userId,
+      details: {
+        viewedBy: req.user.id,
+        viewedAt: new Date()
+      },
+      timestamp: new Date()
+    });
+  }
 }));
 
 /**
@@ -183,7 +199,7 @@ router.get('/:userId', protect, catchAsync(async (req, res, next) => {
  * @route   PUT /api/v1/credit-scores/:userId
  * @access  Private
  */
-router.put('/:userId', protect, catchAsync(async (req, res, next) => {
+router.put('/:userId', protect, requireValidConsent, catchAsync(async (req, res, next) => {
   const { userId } = req.params;
   const { score } = req.body;
 
@@ -265,7 +281,7 @@ router.patch('/reports/:userId', protect, authorize('admin'), updateCreditReport
  * @route   GET /api/v1/credit-scores/history/:userId
  * @access  Private
  */
-router.get('/history/:userId', protect, getCreditScoreHistory);
+router.get('/history/:userId', protect, requireValidConsent, getCreditScoreHistory);
 
 /**
  * @desc    Get credit score statistics (admin only)
@@ -310,6 +326,69 @@ router.get('/decision/:phone', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Simulate credit score and DTI
+router.post('/score/simulate', (req, res) => {
+  try {
+    const { paymentHistory, utilization, income, debt } = req.body;
+    // Build minimal scoreData and userData
+    const scoreData = {
+      score: 300 + paymentHistory * 300 + (1 - utilization) * 250, // Example logic, replace with real scoring if needed
+      classification: 'Simulated',
+      breakdown: {
+        componentRatings: {
+          paymentHistory: { label: 'Good', value: paymentHistory * 100 },
+          creditUtilization: { value: utilization * 100 }
+        }
+      }
+    };
+    const userData = {
+      monthlyIncome: income || 5000,
+      totalDebt: debt || 1000
+    };
+    const decision = evaluateLendingDecision(scoreData, userData);
+    res.json({ score: decision.score, dti: decision.dti });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Loan eligibility checker
+router.post('/loan/eligibility', (req, res) => {
+  try {
+    const { score, income, debt } = req.body;
+    const userData = { monthlyIncome: income, totalDebt: debt };
+    const scoreData = { score };
+    const decision = evaluateLendingDecision(scoreData, userData);
+    res.json({ eligible: decision.decision === 'Approve', dti: decision.dti, reasons: decision.reasons, riskTier: decision.riskTier });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Offer simulator
+router.post('/loan/offer', (req, res) => {
+  try {
+    const { score, income, collateral } = req.body;
+    const userData = { monthlyIncome: income, totalDebt: 0, collateralValue: collateral };
+    const scoreData = { score };
+    const decision = evaluateLendingDecision(scoreData, userData);
+    res.json({ offer: { amount: decision.offer?.maxAmount || 0, rate: decision.offer?.interestRate || null, term: decision.offer?.sampleTerm || null, dti: decision.dti } });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// DTI calculator
+router.post('/loan/dti', (req, res) => {
+  try {
+    const { income, debt } = req.body;
+    const dti = income > 0 ? debt / income : 0;
+    res.json({ dti });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
