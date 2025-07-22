@@ -1,5 +1,3 @@
-// context/AuthContext.jsx
-
 import React, {
   createContext,
   useContext,
@@ -9,7 +7,9 @@ import React, {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from '../hooks/use-toast';
-import * as authService from '../services/authService';
+import authService from '../services/authService';
+import { fetchCsrfToken } from '../services/csrfService';
+import { extractApiError } from '../utils/errorHelpers';
 
 const AuthContext = createContext(null);
 
@@ -61,7 +61,6 @@ export const AuthProvider = ({ children }) => {
         setUser(normalized);
       } else {
         console.debug('[Auth] Invalid session');
-        authService.removeToken();
         setUser(null);
       }
     } catch (error) {
@@ -79,7 +78,6 @@ export const AuthProvider = ({ children }) => {
           variant: 'destructive',
         });
       } else if (error.response.status === 401) {
-        authService.removeToken();
         setUser(null);
       }
     } finally {
@@ -108,31 +106,23 @@ export const AuthProvider = ({ children }) => {
   const login = useCallback(async (email, password) => {
     try {
       console.debug('[Auth] Logging in...');
-      const res = await authService.login(email, password);
-
-      const authenticatedUser = normalizeUser(res.user);
+      await fetchCsrfToken();
+      const userObj = await authService.login(email, password);
+      const authenticatedUser = normalizeUser(userObj);
       setUser(authenticatedUser);
-
       toast({
         title: 'Success',
         description: 'Logged in successfully',
         variant: 'success',
       });
-
-      // Return the user for potential role-based navigation
       return authenticatedUser;
     } catch (error) {
       console.error('[Auth] Login error:', error);
-
       toast({
         title: 'Login Failed',
-        description:
-          error?.response?.data?.message ||
-          error?.message ||
-          'Authentication failed. Please try again.',
+        description: extractApiError(error),
         variant: 'destructive',
       });
-
       throw error;
     }
   }, []);
@@ -143,7 +133,6 @@ export const AuthProvider = ({ children }) => {
     } catch (error) {
       console.warn('[Auth] Logout error:', error);
     } finally {
-      authService.removeToken();
       setUser(null);
       navigate('/login');
 
@@ -158,30 +147,23 @@ export const AuthProvider = ({ children }) => {
   const register = useCallback(async (userData) => {
     try {
       console.debug('[Auth] Registering...');
-      const res = await authService.register(userData);
-
-      const registeredUser = normalizeUser(res.user);
+      await fetchCsrfToken();
+      const userObj = await authService.register(userData);
+      const registeredUser = normalizeUser(userObj);
       setUser(registeredUser);
-
       toast({
         title: 'Welcome!',
         description: 'Account created successfully',
         variant: 'success',
       });
-
       return registeredUser;
     } catch (error) {
       console.error('[Auth] Registration error:', error);
-
       toast({
         title: 'Registration Failed',
-        description:
-          error?.response?.data?.message ||
-          error?.message ||
-          'Registration failed. Please try again.',
+        description: extractApiError(error),
         variant: 'destructive',
       });
-
       throw error;
     }
   }, []);
@@ -204,4 +186,5 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
-export default AuthContext;
+export default AuthProvider;
+export { AuthContext };

@@ -18,7 +18,7 @@ const RecentActivity = ({ activities }) => {
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 transition-colors duration-200">
+    <div className="bg-white dark:bg-black rounded-xl shadow-sm p-6 transition-colors duration-200">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Activity</h2>
         <button className="text-sm text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">
@@ -33,7 +33,7 @@ const RecentActivity = ({ activities }) => {
             </div>
             <div className="ml-4 flex-1">
               <div className="flex justify-between">
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                <p className="text-sm font-medium text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                   {activity.action}
                 </p>
                 <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -59,4 +59,4 @@ const RecentActivity = ({ activities }) => {
   );
 };
 
-export default RecentActivity;
+export default React.memo(RecentActivity);

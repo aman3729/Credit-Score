@@ -228,4 +228,4 @@ const PremiumInsights = ({ creditData, scoreImprovement }) => {
   );
 };
 
-export default PremiumInsights; 
+export default React.memo(PremiumInsights); 

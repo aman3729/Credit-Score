@@ -6,7 +6,7 @@ const Card = ({
   ...props 
 }) => (
   <div 
-    className={`bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 ${className}`}
+    className={`bg-white dark:bg-[#18191a] rounded-xl shadow-sm p-6 ${className}`}
     {...props}
   >
     {children}

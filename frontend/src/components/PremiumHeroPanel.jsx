@@ -47,13 +47,13 @@ const PremiumHeroPanel = ({ user, scoreImprovement, scoreCategory, onRefresh, re
   };
 
   return (
-    <Card className="bg-gradient-to-r from-blue-600 via-purple-600 to-blue-800 text-white border-0 shadow-lg">
+    <Card className="dark:bg-black text-gray-900 dark:text-white border-0 shadow-lg">
       <CardContent className="p-6">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between space-y-4 lg:space-y-0">
           {/* Left side - Greeting and Score Info */}
           <div className="flex-1">
             <div className="flex items-center space-x-3 mb-2">
-              <h1 className="text-2xl lg:text-3xl font-bold">
+              <h1 className="text-2xl lg:text-3xl font-bold text-gray-900 dark:text-white">
                 {getGreeting()}, {user?.name?.split(' ')[0] || 'User'} 👋
               </h1>
               <Badge 
@@ -64,7 +64,7 @@ const PremiumHeroPanel = ({ user, scoreImprovement, scoreCategory, onRefresh, re
               </Badge>
             </div>
             
-            <p className="text-blue-100 text-lg mb-3">
+            <p className="text-blue-900 dark:text-blue-100 text-lg mb-3">
               {getScoreSummary()}
             </p>
             

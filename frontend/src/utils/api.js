@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getCsrfToken, fetchCsrfToken } from '../services/csrfService';
 
 // Base API URL - defaults to the Vite proxy in development
 export const API_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1';
@@ -52,23 +53,30 @@ const api = axios.create({
   }
 });
 
-// Request interceptor for adding auth token and request ID
+// Request interceptor for adding request ID (no Authorization header)
 api.interceptors.request.use(
-  (config) => {
-    // Add auth token to requests if it exists
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    
+  async (config) => {
+    console.log('API Interceptor running for', config.url, 'method:', config.method);
     // Add request ID for tracking
     config.headers['X-Request-ID'] = generateRequestId();
-    
+
+    // Add CSRF token for state-changing requests
+    if (['post', 'put', 'patch', 'delete'].includes((config.method || '').toLowerCase())) {
+      let csrfToken = getCsrfToken();
+      if (!csrfToken) {
+        csrfToken = await fetchCsrfToken();
+      }
+      console.log('Interceptor adding CSRF token:', csrfToken, 'for method', config.method);
+      if (csrfToken) {
+        config.headers['X-CSRF-Token'] = csrfToken;
+      }
+    }
+
     // Initialize retry metadata if it doesn't exist
     if (!config.metadata) {
       config.metadata = { retryCount: 0 };
     }
-    
+
     // Log request in development mode
     if (import.meta.env.MODE === 'development') {
       const logData = {
@@ -77,15 +85,9 @@ api.interceptors.request.use(
         params: config.params,
         headers: { ...config.headers }
       };
-      
-      // Redact sensitive headers in logs
-      if (logData.headers.Authorization) {
-        logData.headers.Authorization = 'Bearer [redacted]';
-      }
-      
       console.log(`[API] Request: ${logData.method} ${config.url}`, logData);
     }
-    
+
     return config;
   },
   (error) => {

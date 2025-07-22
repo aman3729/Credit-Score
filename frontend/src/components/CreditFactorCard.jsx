@@ -222,4 +222,4 @@ const CreditFactorCard = ({ factor, score, breakdown }) => {
   );
 };
 
-export default CreditFactorCard;
+export default React.memo(CreditFactorCard);

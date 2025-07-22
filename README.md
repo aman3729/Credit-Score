@@ -101,4 +101,15 @@ The API endpoints are documented using Swagger and can be accessed at `/api-docs
 
 ## License
 
-This project is licensed under the MIT License. 
+This project is licensed under the MIT License.
+
+## Batch Uploads (Production)
+
+- **All batch uploads must use the Schema Mapping Engine.**
+- Endpoint: `/api/schema-mapping/apply/:mappingId`
+- **A mapping and partner selection are required for every upload.**
+- Supported file formats: **JSON, CSV, Excel (.xlsx/.xls), XML, TXT**
+- The old `/api/upload/batch` endpoint is **deprecated and removed**.
+
+### Migration Note
+If you previously used direct upload, you must now create a schema mapping for your data format and select it during upload. See `SCHEMA_MAPPING_ENGINE.md` for details. 

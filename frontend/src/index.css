@@ -9,28 +9,51 @@
   :root {
     --background: 0 0% 100%;
     --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 222.2 84% 4.9%;
+    --radius: 0.5rem;
   }
 
   .dark {
-    --background: 0 0% 7%; /* matte black */
-    --foreground: 210 40% 98%;
-    --border: 0 0% 18%;
+    /* MATTE BLACK THEME */
+    --background: 220 6% 10%;        /* #18191a */
+    --foreground: 210 20% 98%;       /* Enhanced contrast */
+    --card: 220 6% 8%;               /* Slightly darker cards */
+    --card-foreground: 210 30% 96%;
+    --popover: 220 6% 9%;
+    --popover-foreground: 210 20% 98%;
+    --primary: 195 70% 52%;          /* Teal accent #2EB9DF */
+    --primary-foreground: 210 40% 98%;
+    --secondary: 220 6% 15%;         /* Matte element surfaces */
+    --secondary-foreground: 210 30% 96%;
+    --muted: 220 6% 20%;
+    --muted-foreground: 215 15% 70%; /* Better readability */
+    --accent: 220 6% 15%;
+    --accent-foreground: 210 30% 96%;
+    --destructive: 0 84% 58%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 215 8% 24%;            /* #3A3B3C */
+    --input: 215 8% 24%;
+    --ring: 195 70% 52%;             /* Teal focus ring */
   }
 }
 
 @layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --border: 214.3 31.8% 91.4%;
-  }
-
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-  }
-
   * {
     @apply border-border;
   }
@@ -38,6 +61,7 @@
   body {
     @apply bg-background text-foreground min-h-screen transition-colors duration-200;
     font-feature-settings: "rlig" 1, "calt" 1;
+    background-color: hsl(var(--background));
   }
   
   /* Smooth scrolling for the whole app */
@@ -51,10 +75,221 @@
   }
   
   ::-webkit-scrollbar-track {
-    @apply bg-gray-100 dark:bg-black;
+    @apply bg-gray-100;
+  }
+  
+  .dark ::-webkit-scrollbar-track {
+    background-color: #18191a;
   }
   
   ::-webkit-scrollbar-thumb {
-    @apply bg-gray-300 dark:bg-gray-600 rounded-full hover:bg-gray-400 dark:hover:bg-gray-500;
+    @apply bg-gray-300 rounded-full hover:bg-gray-400;
   }
+  
+  .dark ::-webkit-scrollbar-thumb {
+    background-color: #3A3B3C;
+  }
+  
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background-color: #4E4F50;
+  }
+}
+
+/* Custom styles for lender dashboard */
+@layer components {
+  /* Enhanced button styles */
+  .lender-action-btn {
+    @apply transition-all duration-200 ease-in-out;
+  }
+  
+  .lender-action-btn:hover {
+    @apply transform scale-105;
+  }
+  
+  /* Fix for Select dropdown z-index issues */
+  [data-radix-popper-content-wrapper] {
+    z-index: 9999 !important;
+  }
+  
+  /* Ensure Select dropdowns are visible */
+  .radix-select-content {
+    z-index: 9999 !important;
+  }
+  
+  /* Modal enhancements */
+  .register-modal .ant-modal-content,
+  .batch-upload-modal .ant-modal-content {
+    @apply rounded-xl border-0 shadow-2xl;
+  }
+  
+  .register-modal .ant-modal-header,
+  .batch-upload-modal .ant-modal-header {
+    @apply border-b border-gray-200 dark:border-gray-700 rounded-t-xl;
+  }
+  
+  .dark .register-modal .ant-modal-header,
+  .dark .batch-upload-modal .ant-modal-header {
+    background-color: #18191a;
+    border-bottom-color: #3A3B3C;
+  }
+  
+  .register-modal .ant-modal-title,
+  .batch-upload-modal .ant-modal-title {
+    @apply text-lg font-semibold;
+  }
+  
+  /* Header action buttons */
+  .header-actions {
+    @apply flex items-center gap-3;
+  }
+  
+  .header-actions .btn-group {
+    @apply flex items-center gap-2;
+  }
+  
+  .header-actions .btn-primary {
+    @apply bg-green-600 hover:bg-green-700 text-white shadow-lg hover:shadow-xl transition-all duration-200;
+  }
+  
+  .header-actions .btn-secondary {
+    @apply hover:bg-blue-50 dark:hover:bg-[#222325] transition-all duration-200;
+  }
+}
+
+/* Fix browser autofill for dark input fields */
+input:-webkit-autofill,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #18191a inset !important;
+  box-shadow: 0 0 0 1000px #18191a inset !important;
+  -webkit-text-fill-color: #F5F5F5 !important;
+  caret-color: #F5F5F5 !important;
+}
+
+/* Unified matte black styles for Ant Design */
+.dark .ant-card,
+.dark .ant-modal-content,
+.dark .ant-alert,
+.dark .ant-select-selector,
+.dark .ant-input,
+.dark .ant-upload,
+.dark .ant-progress-bg,
+.dark .ant-tag,
+.dark .ant-list-item,
+.dark .ant-table,
+.dark .ant-table-thead > tr > th {
+  background-color: #18191a !important;
+  color: #E4E6EB !important;
+  border-color: #3A3B3C !important;
+}
+
+.dark .ant-card-head {
+  background-color: #18191a !important;
+  border-bottom-color: #3A3B3C !important;
+}
+
+.dark .ant-card-head-title {
+  color: #E4E6EB !important;
+}
+
+.dark .ant-input,
+.dark .ant-select-selector {
+  background-color: #18191a !important;
+  color: #E4E6EB !important;
+  border-color: #3A3B3C !important;
+}
+
+.dark .ant-input::placeholder,
+.dark .ant-select-selection-placeholder {
+  color: #9EA0A4 !important;
+}
+
+.dark .ant-btn-primary {
+  background: #2EB9DF !important;
+  color: #fff !important;
+  border-color: #2EB9DF !important;
+}
+
+.dark .ant-btn-default {
+  background: #222325 !important;
+  color: #E4E6EB !important;
+  border-color: #3A3B3C !important;
+}
+
+.dark .ant-alert-success {
+  background: #18191a !important;
+  color: #E4E6EB !important;
+  border-color: #52c41a !important;
+}
+
+.dark .ant-alert-error {
+  background: #18191a !important;
+  color: #E4E6EB !important;
+  border-color: #ff4d4f !important;
+}
+
+.dark .ant-tag-success {
+  background: #222325 !important;
+  color: #52c41a !important;
+  border-color: #52c41a !important;
+}
+
+.dark .ant-tag-error {
+  background: #222325 !important;
+  color: #ff4d4f !important;
+  border-color: #ff4d4f !important;
+}
+
+/* Typography and text elements */
+.dark .ant-typography,
+.dark .ant-typography h1,
+.dark .ant-typography h2,
+.dark .ant-typography h3,
+.dark .ant-typography h4,
+.dark .ant-typography h5,
+.dark .ant-typography h6,
+.dark .ant-upload,
+.dark .ant-upload-list,
+.dark .ant-upload-text,
+.dark .ant-card-meta-description {
+  color: #E4E6EB !important;
+}
+
+.dark .ant-upload-drag {
+  background: #222325 !important;
+  color: #E4E6EB !important;
+  border-color: #3A3B3C !important;
+}
+
+.dark .ant-upload-hint {
+  color: #9EA0A4 !important;
+}
+
+/* Global matte black background */
+.dark, 
+.dark body, 
+.dark .min-h-screen, 
+.dark .bg-gray-900, 
+.dark .bg-gray-800, 
+.dark .bg-dark-card, 
+.dark .bg-dark-secondary {
+  background-color: #18191a !important;
+  background-image: none !important;
+  color: #E4E6EB !important;
+}
+
+/* Table row hover states */
+.dark .ant-table-tbody > tr.ant-table-row:hover > td {
+  background-color: #222325 !important;
+}
+
+/* Pagination items */
+.dark .ant-pagination-item {
+  background-color: #18191a !important;
+  border-color: #3A3B3C !important;
+}
+
+.dark .ant-pagination-item a {
+  color: #E4E6EB !important;
 }

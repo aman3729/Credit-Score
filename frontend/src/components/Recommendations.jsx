@@ -33,8 +33,8 @@ const Recommendations = ({ recommendations }) => {
     );
   }
   return (
-    <div className="bg-white dark:bg-dark-card rounded-2xl shadow-xl p-6 transition-colors duration-200">
-      <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-4">
+    <div className="bg-white dark:bg-black rounded-2xl shadow-xl p-6 transition-colors duration-200">
+      <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
         <i className="fas fa-clipboard-list text-green-500 dark:text-green-400 mr-2"></i>
         Recommendations
       </h2>
@@ -42,7 +42,7 @@ const Recommendations = ({ recommendations }) => {
         {recommendations.filter(Boolean).map((rec, index) => (
           <div key={index} className="flex items-start">
             <div className="flex-shrink-0 mt-1">
-              <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-dark-secondary flex items-center justify-center">
+              <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-black flex items-center justify-center">
                 <span className="text-blue-600 dark:text-blue-400 font-bold text-xs">{index + 1}</span>
               </div>
             </div>

@@ -97,12 +97,12 @@ const SystemMonitor = () => {
       const interval = setInterval(refreshAll, 30000); // Refresh every 30 seconds
       return () => clearInterval(interval);
     }
-  }, [autoRefresh, refreshAll]);
+  }, [autoRefresh]); // Remove refreshAll dependency to prevent recreation
 
   // Initial load
   useEffect(() => {
     refreshAll();
-  }, [refreshAll]);
+  }, []); // Remove refreshAll dependency to prevent recreation
 
   // Restart service
   const restartService = async (serviceName) => {

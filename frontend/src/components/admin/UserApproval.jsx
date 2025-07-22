@@ -14,6 +14,7 @@ import { Label } from '../ui/label';
 import { Textarea } from '../ui/textarea';
 import { useToast } from '../../hooks/use-toast';
 import { api } from '../../lib/api';
+import { getCsrfToken, fetchCsrfToken } from '../../services/csrfService';
 
 const UserApproval = () => {
   const { toast } = useToast();
@@ -72,6 +73,11 @@ const UserApproval = () => {
   const approveUser = async (userId, approved = true, role = 'user', adminNotes = '') => {
     try {
       setApproving(prev => ({ ...prev, [userId]: true }));
+      // Ensure CSRF token is present and fresh
+      let csrfToken = getCsrfToken();
+      if (!csrfToken) {
+        csrfToken = await fetchCsrfToken();
+      }
       
       const response = await api.post(`/admin/users/${userId}/approve`, {
         approved,
@@ -347,15 +353,15 @@ const UserApproval = () => {
                     
                     <TableCell>
                       <div className="space-y-1">
-                        <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">
+                        <Badge variant="warning">
                           <Clock className="h-3 w-3 mr-1" />Pending
                         </Badge>
                         {user.emailVerified ? (
-                          <Badge variant="outline" className="text-green-600 border-green-600">
+                          <Badge variant="success">
                             Email Verified
                           </Badge>
                         ) : (
-                          <Badge variant="outline" className="text-red-600 border-red-600">
+                          <Badge variant="warning">
                             Email Pending
                           </Badge>
                         )}
@@ -612,8 +618,10 @@ const UserApproval = () => {
                 </Card>
               </div>
             ) : (
-              <div className="text-center py-8">
-                <p className="text-gray-500">No user details found</p>
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <AlertTriangle className="h-12 w-12 text-yellow-400 mb-4" />
+                <p className="text-lg font-semibold text-gray-700 dark:text-gray-200 mb-2">No user details found</p>
+                <p className="text-gray-500 dark:text-gray-400 mb-4">We couldn't retrieve details for this user. Please check the user record or try again later.</p>
               </div>
             )}
 
@@ -625,7 +633,6 @@ const UserApproval = () => {
               >
                 Close
               </Button>
-              
               {/* Role Selection */}
               <div className="flex items-center space-x-4 mr-4">
                 <div className="flex items-center space-x-2">
@@ -633,6 +640,7 @@ const UserApproval = () => {
                   <Select
                     value={approvalData.role}
                     onValueChange={(value) => setApprovalData(prev => ({ ...prev, role: value }))}
+                    disabled={!detailedUser}
                   >
                     <SelectTrigger className="w-32">
                       <SelectValue />
@@ -645,7 +653,6 @@ const UserApproval = () => {
                   </Select>
                 </div>
               </div>
-              
               {/* Admin Notes */}
               <div className="flex-1 mr-4">
                 <Textarea
@@ -653,16 +660,16 @@ const UserApproval = () => {
                   value={approvalData.adminNotes}
                   onChange={(e) => setApprovalData(prev => ({ ...prev, adminNotes: e.target.value }))}
                   className="min-h-[60px]"
+                  disabled={!detailedUser}
                 />
               </div>
-              
               <Button
                 variant="destructive"
                 onClick={() => {
                   approveUser(selectedUser._id, false, approvalData.role, approvalData.adminNotes);
                   setShowDetails(false);
                 }}
-                disabled={approving[selectedUser._id]}
+                disabled={approving[selectedUser._id] || !detailedUser}
               >
                 {approving[selectedUser._id] ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-2" />
@@ -676,7 +683,7 @@ const UserApproval = () => {
                   approveUser(selectedUser._id, true, approvalData.role, approvalData.adminNotes);
                   setShowDetails(false);
                 }}
-                disabled={approving[selectedUser._id]}
+                disabled={approving[selectedUser._id] || !detailedUser}
               >
                 {approving[selectedUser._id] ? (
                   <Loader2 className="h-4 w-4 animate-spin mr-2" />

@@ -29,8 +29,8 @@ const ScoreHistory = ({ score = 700 }) => {  // Default score of 700 if undefine
   const maxScore = Math.max(...historyData.map(item => item.score));
   
   return (
-    <div className="bg-white dark:bg-dark-card rounded-2xl shadow-xl p-6 transition-colors duration-200">
-      <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-6">
+    <div className="bg-white dark:bg-black rounded-2xl shadow-xl p-6 transition-colors duration-200">
+      <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-6">
         <i className="fas fa-chart-bar text-purple-500 dark:text-purple-400 mr-2"></i>
         Score History
       </h2>

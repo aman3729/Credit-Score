@@ -1,0 +1,32 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dir: [backend, frontend]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18.x
+
+      - name: Install dependencies
+        run: |
+          cd ${{ matrix.dir }}
+          npm ci
+
+      - name: Run npm audit
+        run: |
+          cd ${{ matrix.dir }}
+          npm audit --audit-level=moderate 

@@ -48,7 +48,7 @@ const CreditScoreDisplay = ({
   };
 
   return (
-    <div className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm transition-colors duration-200">
+    <div className="bg-white dark:bg-black p-6 rounded-xl shadow-sm transition-colors duration-200">
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Credit Score</h2>
@@ -59,7 +59,7 @@ const CreditScoreDisplay = ({
           >
             <FiInfo className="w-4 h-4 text-gray-400 cursor-help" />
             {isHovered && (
-              <div className="absolute z-10 w-64 p-3 mt-2 text-sm text-gray-700 bg-white border border-gray-200 rounded-lg shadow-lg dark:bg-gray-800 dark:text-gray-300 dark:border-gray-600">
+              <div className="absolute z-10 w-64 p-3 mt-2 text-sm text-gray-700 dark:text-gray-300 bg-white border border-gray-200 rounded-lg shadow-lg dark:bg-black dark:text-gray-300 dark:border-gray-600">
                 <p>Your credit score is calculated based on multiple factors including payment history, credit utilization, and more.</p>
               </div>
             )}
@@ -180,4 +180,4 @@ const CreditScoreDisplay = ({
   );
 };
 
-export default CreditScoreDisplay;
+export default React.memo(CreditScoreDisplay);

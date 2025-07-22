@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { toast } from '../hooks/use-toast';
+import { getCsrfToken, fetchCsrfToken } from '../services/csrfService';
 
 // Create axios instance with base URL
 const api = axios.create({
@@ -24,6 +25,25 @@ const processQueue = (error, token = null) => {
   });
   failedQueue = [];
 };
+
+// Add a request interceptor to attach CSRF token to mutating requests
+api.interceptors.request.use(
+  async (config) => {
+    // Attach CSRF token for mutating requests
+    const method = config.method && config.method.toLowerCase();
+    if (["post", "put", "patch", "delete"].includes(method)) {
+      let csrfToken = getCsrfToken();
+      if (!csrfToken) {
+        csrfToken = await fetchCsrfToken();
+      }
+      if (csrfToken) {
+        config.headers['x-csrf-token'] = csrfToken;
+      }
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
 // Request interceptor to add auth token to requests
 api.interceptors.request.use(
@@ -154,3 +174,40 @@ export default api;
 
 // Also export as named export for flexibility
 export { api };
+
+// Mapping Profile API
+export async function createMappingProfile(profile) {
+  // Update to correct endpoint if needed
+  return await api.post('/schema-mapping/create', profile);
+}
+export async function getMappingProfiles(partnerId) {
+  // Use the correct backend endpoint for partner mappings
+  return await api.get(`/schema-mapping/partner/${partnerId}`);
+}
+export async function getMappingProfile(id) {
+  // If a get-by-id endpoint exists, update here; otherwise, remove or adjust as needed
+  return await api.get(`/schema-mapping/${id}`);
+}
+export async function updateMappingProfile(id, updates) {
+  // If an update endpoint exists, update here; otherwise, remove or adjust as needed
+  return await api.put(`/schema-mapping/${id}`, updates);
+}
+export async function deleteMappingProfile(id) {
+  // If a delete endpoint exists, update here; otherwise, remove or adjust as needed
+  return await api.delete(`/schema-mapping/${id}`);
+}
+
+// Fetch admin stats
+export async function fetchAdminStats() {
+  const response = await fetch("/api/v1/admin/stats", {
+    method: "GET",
+    headers: {
+      "accept": "application/json"
+    },
+    credentials: "include" // Only if your API requires cookies/session
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch admin stats: ${response.status}`);
+  }
+  return await response.json();
+}

@@ -10,8 +10,38 @@ import {
   Zap,
   Target
 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogFooter, DialogTitle } from './ui/dialog';
+import { Input } from './ui/input';
+import { useState } from 'react';
 
 const PremiumToolsPanel = ({ user, creditData }) => {
+  const [openTool, setOpenTool] = useState(null); // 'score' | 'eligibility' | 'offer' | 'dti' | null
+  const [simInput, setSimInput] = useState({ paymentHistory: 0.95, utilization: 0.3, score: 700, income: 5000, debt: 1000, collateral: 0 });
+  const [simResult, setSimResult] = useState(null);
+
+  const handleSimChange = e => setSimInput(f => ({ ...f, [e.target.name]: e.target.value }));
+
+  const handleScoreSim = () => {
+    // Simple score simulation logic (replace with real logic or API call)
+    const { paymentHistory, utilization } = simInput;
+    const score = Math.round(300 + paymentHistory * 300 + (1 - utilization) * 250);
+    setSimResult(`Simulated Score: ${score}`);
+  };
+  const handleEligibility = () => {
+    // Simple eligibility logic (replace with real logic or API call)
+    const eligible = simInput.score > 650 && simInput.income > 2000 && simInput.debt / simInput.income < 0.4;
+    setSimResult(eligible ? 'Eligible for loan' : 'Not eligible for loan');
+  };
+  const handleOffer = () => {
+    // Simple offer logic (replace with real logic or API call)
+    if (simInput.score < 600) setSimResult('No offers available');
+    else setSimResult(`Offer: $${simInput.income * 3} at 12% for 24 months`);
+  };
+  const handleDTI = () => {
+    const dti = (simInput.debt / simInput.income) * 100;
+    setSimResult(`DTI: ${dti.toFixed(1)}% (${dti < 36 ? 'Good' : 'High'})`);
+  };
+
   const tools = [
     {
       name: 'Credit Simulator',
@@ -51,11 +81,16 @@ const PremiumToolsPanel = ({ user, creditData }) => {
           <span>Premium Tools</span>
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-2">
         {tools.map((tool) => {
           const Icon = tool.icon;
+          let toolKey = null;
+          if (tool.name === 'Credit Simulator') toolKey = 'score';
+          if (tool.name === 'Score Projection') toolKey = 'eligibility';
+          if (tool.name === 'Report Download') toolKey = 'offer';
+          if (tool.name === 'Lender Sharing') toolKey = 'dti';
           return (
-            <div key={tool.name} className="p-4 border border-gray-200 dark:border-gray-700 rounded-lg">
+            <div key={tool.name} className="p-2 border border-gray-200 dark:border-gray-700 rounded-lg">
               <div className="flex items-start space-x-3">
                 <div className={`p-2 rounded-lg ${tool.color} text-white`}>
                   <Icon className="h-4 w-4" />
@@ -82,6 +117,7 @@ const PremiumToolsPanel = ({ user, creditData }) => {
                     size="sm" 
                     disabled={!tool.available}
                     className="w-full"
+                    onClick={() => setOpenTool(toolKey)}
                   >
                     {tool.available ? 'Use Tool' : 'Enable First'}
                   </Button>
@@ -90,9 +126,56 @@ const PremiumToolsPanel = ({ user, creditData }) => {
             </div>
           );
         })}
+        {/* Modals for each tool */}
+        <Dialog open={openTool === 'score'} onOpenChange={v => !v && setOpenTool(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Score Simulator</DialogTitle></DialogHeader>
+            <label>Payment History (%)<Input name="paymentHistory" type="number" min="0" max="1" step="0.01" value={simInput.paymentHistory} onChange={handleSimChange} /></label>
+            <label>Credit Utilization (%)<Input name="utilization" type="number" min="0" max="1" step="0.01" value={simInput.utilization} onChange={handleSimChange} /></label>
+            <DialogFooter>
+              <Button onClick={handleScoreSim}>Simulate</Button>
+            </DialogFooter>
+            {simResult && <div className="mt-2 text-green-600">{simResult}</div>}
+          </DialogContent>
+        </Dialog>
+        <Dialog open={openTool === 'eligibility'} onOpenChange={v => !v && setOpenTool(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Loan Eligibility Checker</DialogTitle></DialogHeader>
+            <label>Score<Input name="score" type="number" value={simInput.score} onChange={handleSimChange} /></label>
+            <label>Monthly Income<Input name="income" type="number" value={simInput.income} onChange={handleSimChange} /></label>
+            <label>Monthly Debt<Input name="debt" type="number" value={simInput.debt} onChange={handleSimChange} /></label>
+            <DialogFooter>
+              <Button onClick={handleEligibility}>Check Eligibility</Button>
+            </DialogFooter>
+            {simResult && <div className="mt-2 text-green-600">{simResult}</div>}
+          </DialogContent>
+        </Dialog>
+        <Dialog open={openTool === 'offer'} onOpenChange={v => !v && setOpenTool(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Offer Simulator</DialogTitle></DialogHeader>
+            <label>Score<Input name="score" type="number" value={simInput.score} onChange={handleSimChange} /></label>
+            <label>Monthly Income<Input name="income" type="number" value={simInput.income} onChange={handleSimChange} /></label>
+            <label>Collateral Value<Input name="collateral" type="number" value={simInput.collateral} onChange={handleSimChange} /></label>
+            <DialogFooter>
+              <Button onClick={handleOffer}>Simulate Offer</Button>
+            </DialogFooter>
+            {simResult && <div className="mt-2 text-green-600">{simResult}</div>}
+          </DialogContent>
+        </Dialog>
+        <Dialog open={openTool === 'dti'} onOpenChange={v => !v && setOpenTool(null)}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>DTI Calculator</DialogTitle></DialogHeader>
+            <label>Monthly Debt<Input name="debt" type="number" value={simInput.debt} onChange={handleSimChange} /></label>
+            <label>Monthly Income<Input name="income" type="number" value={simInput.income} onChange={handleSimChange} /></label>
+            <DialogFooter>
+              <Button onClick={handleDTI}>Calculate DTI</Button>
+            </DialogFooter>
+            {simResult && <div className="mt-2 text-green-600">{simResult}</div>}
+          </DialogContent>
+        </Dialog>
         
         {/* Quick Stats */}
-        <div className="mt-6 p-4 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-lg">
+        <div className="mt-2 p-2 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-900/20 dark:to-purple-900/20 rounded-lg">
           <h4 className="font-medium text-gray-900 dark:text-white mb-3 flex items-center">
             <Target className="h-4 w-4 mr-2" />
             Quick Stats
@@ -117,4 +200,4 @@ const PremiumToolsPanel = ({ user, creditData }) => {
   );
 };
 
-export default PremiumToolsPanel; 
+export default React.memo(PremiumToolsPanel); 

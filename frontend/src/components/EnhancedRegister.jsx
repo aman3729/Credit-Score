@@ -20,28 +20,24 @@ import {
 } from './ui/select';
 import { Checkbox } from './ui/checkbox';
 import { Progress } from './ui/progress';
-import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
 import { 
   Eye, 
   EyeOff, 
   Loader2, 
   User, 
-  Mail, 
   Phone, 
   Calendar, 
   CreditCard, 
-  MapPin, 
-  Building,
-  DollarSign,
+  MapPin,
+  Briefcase,
   Shield,
-  FileText,
-  CheckCircle,
-  AlertCircle,
-  Info,
-  AlertTriangle
+  Mail,
+  AlertTriangle,
+  AlertCircle
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
+import authService from '../services/authService';
 
 // Password strength meter component
 const PasswordStrengthMeter = ({ password }) => {
@@ -59,18 +55,18 @@ const PasswordStrengthMeter = ({ password }) => {
   const percentage = (strength / 5) * 100;
   
   const getStrengthColor = () => {
-    if (percentage <= 20) return 'bg-red-500';
-    if (percentage <= 40) return 'bg-orange-500';
-    if (percentage <= 60) return 'bg-yellow-500';
-    if (percentage <= 80) return 'bg-blue-500';
+    if (strength <= 1) return 'bg-red-500';
+    if (strength <= 2) return 'bg-orange-500';
+    if (strength <= 3) return 'bg-yellow-500';
+    if (strength <= 4) return 'bg-blue-500';
     return 'bg-green-500';
   };
 
   const getStrengthText = () => {
-    if (percentage <= 20) return 'Very Weak';
-    if (percentage <= 40) return 'Weak';
-    if (percentage <= 60) return 'Fair';
-    if (percentage <= 80) return 'Good';
+    if (strength <= 1) return 'Very Weak';
+    if (strength <= 2) return 'Weak';
+    if (strength <= 3) return 'Fair';
+    if (strength <= 4) return 'Good';
     return 'Strong';
   };
 
@@ -79,14 +75,15 @@ const PasswordStrengthMeter = ({ password }) => {
       <div className="flex justify-between text-sm">
         <span className="text-gray-600 dark:text-gray-400">Password Strength</span>
         <span className={`font-medium ${
-          percentage <= 40 ? 'text-red-600' : 
-          percentage <= 60 ? 'text-yellow-600' : 
-          percentage <= 80 ? 'text-blue-600' : 'text-green-600'
+          strength <= 1 ? 'text-red-600' : 
+          strength <= 2 ? 'text-orange-600' : 
+          strength <= 3 ? 'text-yellow-600' : 
+          strength <= 4 ? 'text-blue-600' : 'text-green-600'
         }`}>
           {getStrengthText()}
         </span>
       </div>
-      <Progress value={percentage} className="h-2" />
+      <Progress value={percentage} className={`h-2 ${getStrengthColor()}`} />
       <div className="text-xs text-gray-500 dark:text-gray-400">
         Include uppercase, lowercase, numbers, and special characters
       </div>
@@ -128,44 +125,6 @@ const MaskedInput = ({ value, onChange, placeholder, mask, ...props }) => {
   );
 };
 
-// Financial input with validation
-const FinancialInput = ({ label, value, onChange, error, helperText, ...props }) => {
-  const validateAmount = (amount) => {
-    if (amount < 0) return "Cannot be negative";
-    if (amount > 1000000) return "Unrealistic value";
-    return null;
-  };
-
-  const handleChange = (e) => {
-    const value = parseFloat(e.target.value) || 0;
-    const validationError = validateAmount(value);
-    onChange(value, validationError);
-  };
-
-  return (
-    <div className="space-y-2">
-      <Label className="text-gray-700 dark:text-gray-300">{label}</Label>
-      <div className="relative">
-        <Input
-          {...props}
-          type="number"
-          value={value || ''}
-          onChange={handleChange}
-          className={`pr-8 ${error ? 'border-red-500' : ''}`}
-        />
-        <div className="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
-          <DollarSign className="h-4 w-4 text-gray-400" />
-        </div>
-      </div>
-      {(error || helperText) && (
-        <p className={`text-xs ${error ? 'text-red-600' : 'text-gray-500'}`}>
-          {error || helperText}
-        </p>
-      )}
-    </div>
-  );
-};
-
 const EnhancedRegister = ({ 
   isAdmin = false, 
   onSuccess, 
@@ -178,6 +137,7 @@ const EnhancedRegister = ({
   
   const [formData, setFormData] = useState({
     username: '',
+    email: '',
     fullName: '',
     phone: '',
     password: '',
@@ -186,24 +146,13 @@ const EnhancedRegister = ({
     nationalId: '',
     address: '',
     gender: '',
-    
-    // Account Type
     role: initialRole,
-    badgeTier: 'basic',
-    
-    // Employment Details (keeping only this from financial section)
     employmentStatus: '',
     employerName: '',
     industry: '',
-    
-    // Legal
     agreeTerms: false,
     authorizeCreditChecks: false,
-    
-    // Admin Only
-    initialCreditScore: '',
-    sourceNotes: '',
-    branchVerification: false
+    bankId: '' // <-- Add bankId to formData
   });
 
   const [errors, setErrors] = useState({});
@@ -220,6 +169,11 @@ const EnhancedRegister = ({
         if (!/^[a-zA-Z0-9_]+$/.test(value)) return 'Username can only contain alphanumeric characters and underscores';
         return null;
       
+      case 'email':
+        if (!value.trim()) return 'Email is required';
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return 'Please enter a valid email address';
+        return null;
+      
       case 'fullName':
         if (!value.trim()) return 'Full name is required';
         if (value.trim().length < 2) return 'Name must be at least 2 characters';
@@ -232,7 +186,13 @@ const EnhancedRegister = ({
       
       case 'dateOfBirth':
         if (!value) return 'Date of birth is required';
-        const age = new Date().getFullYear() - new Date(value).getFullYear();
+        const today = new Date();
+        const birthDate = new Date(value);
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const monthDiff = today.getMonth() - birthDate.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+          age--;
+        }
         if (age < 18) return 'Must be at least 18 years old';
         if (age > 120) return 'Please enter a valid date of birth';
         return null;
@@ -279,12 +239,17 @@ const EnhancedRegister = ({
         if (!value) return 'You must authorize credit report pulls';
         return null;
       
+      case 'bankId':
+        if (!value) return 'Bank selection is required';
+        return null;
+      
       default:
         return null;
     }
   };
 
   const handleChange = (name, value) => {
+    console.log(`handleChange called for ${name} with value:`, value);
     setFormData(prev => ({ ...prev, [name]: value }));
     
     // Clear error for this field
@@ -303,8 +268,9 @@ const EnhancedRegister = ({
   const validateForm = () => {
     const newErrors = {};
     const requiredFields = [
-      'username', 'fullName', 'phone', 'dateOfBirth', 'nationalId', 'address', 'role', 'employmentStatus', 'industry',
-      'password', 'confirmPassword', 'agreeTerms', 'authorizeCreditChecks'
+      'username', 'email', 'fullName', 'phone', 'dateOfBirth', 'nationalId', 
+      'address', 'role', 'employmentStatus', 'industry', 'password', 
+      'confirmPassword', 'agreeTerms', 'authorizeCreditChecks', 'bankId' // <-- Add bankId
     ];
 
     requiredFields.forEach(field => {
@@ -333,6 +299,7 @@ const EnhancedRegister = ({
     try {
       const payload = {
         username: formData.username.trim(),
+        email: formData.email.trim(),
         name: formData.fullName,
         phoneNumber: formData.phone.trim(),
         dateOfBirth: formData.dateOfBirth,
@@ -347,58 +314,12 @@ const EnhancedRegister = ({
         industry: formData.industry,
         agreeTerms: formData.agreeTerms,
         authorizeCreditChecks: formData.authorizeCreditChecks,
-        badgeTier: formData.badgeTier,
-        ...(isAdmin && {
-          adminFields: {
-            initialCreditScore: formData.initialCreditScore || undefined,
-            sourceNotes: formData.sourceNotes || undefined,
-            branchVerification: formData.branchVerification
-          }
-        })
+        bankId: formData.bankId // <-- Add bankId to payload
       };
 
-      // Debug logging
-      console.log('Sending registration payload:', JSON.stringify(payload, null, 2));
+      // Use authService.register to ensure CSRF token is set
+      const user = await authService.register(payload);
 
-      const response = await fetch('/api/v1/auth/register', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-      
-      // Debug logging
-      console.log('Registration response status:', response.status);
-      console.log('Registration response data:', JSON.stringify(data, null, 2));
-
-      if (!response.ok) {
-        console.error('Registration failed with status:', response.status);
-        console.error('Error data:', data);
-        
-        // Show detailed validation errors
-        if (data.errors && Array.isArray(data.errors)) {
-          const errorMessages = data.errors.map(err => {
-            if (typeof err === 'string') return err;
-            if (err.message) return err.message;
-            if (err.msg) return err.msg;
-            return JSON.stringify(err);
-          }).join(', ');
-          throw new Error(`Validation failed: ${errorMessages}`);
-        } else if (data.message) {
-          throw new Error(data.message);
-        } else {
-          throw new Error('Registration failed');
-        }
-      }
-
-      console.log('Registration successful!');
-      console.log('User data:', data.user);
-      console.log('Full response data:', data);
-
-      console.log('About to show success toast...');
       toast({
         title: 'Registration Successful',
         description: showPendingMessage 
@@ -406,34 +327,23 @@ const EnhancedRegister = ({
           : 'Account created successfully!',
         variant: 'success'
       });
-      console.log('Success toast should be displayed');
 
       if (onSuccess) {
-        console.log('Calling onSuccess callback');
-        onSuccess(data);
+        onSuccess(user);
       } else if (isAdmin) {
-        console.log('Admin mode - staying in dashboard');
-        // Stay in admin dashboard
         if (onClose) onClose();
       } else {
-        console.log('Regular user - will redirect in 5 seconds');
-        // Wait a moment to show the success message, then redirect
         setTimeout(() => {
-          console.log('Redirecting now...');
-          // Redirect based on role - try both possible user data locations
-          const userData = data.user || data.data?.user;
-          console.log('User data for redirect:', userData);
-          if (userData?.role === 'lender') {
+          if (user?.role === 'lender') {
             navigate('/lender');
-          } else if (userData?.role === 'admin') {
+          } else if (user?.role === 'admin') {
             navigate('/admin');
           } else {
             navigate('/dashboard');
           }
-        }, 5000); // Show success message for 5 seconds
+        }, 3000);
       }
     } catch (error) {
-      console.error('Registration error:', error);
       toast({
         title: 'Registration Failed',
         description: error.message,
@@ -445,17 +355,17 @@ const EnhancedRegister = ({
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 p-4">
-      <Card className="w-full max-w-4xl shadow-xl rounded-2xl overflow-hidden border-0 dark:border dark:border-gray-700 max-h-[90vh] overflow-y-auto">
-        <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-700 dark:from-gray-800 dark:to-gray-900 text-white p-8">
+    <div className="min-h-screen flex items-center justify-center p-2 animate-fade-in-slow">
+      <Card className="w-full max-w-4xl border border-[#6B5B95] bg-white dark:bg-[rgba(245,245,245,0.10)] text-[#1A3C5E] dark:text-[#F5F5F5] shadow-[0_0_15px_rgba(46,185,223,0.3)] backdrop-blur-lg animate-fade-in">
+        <CardHeader className="p-8 border-b border-[#6B5B95] bg-white dark:bg-transparent">
           <div className="text-center">
-            <div className="mx-auto bg-white dark:bg-gray-700 rounded-full p-3 w-16 h-16 flex items-center justify-center mb-4">
-              <User className="h-8 w-8 text-blue-600" />
+            <div className="mx-auto bg-[#F8F9FA] dark:bg-[#18191a] rounded-full p-3 w-16 h-16 flex items-center justify-center mb-4">
+              <User className="h-8 w-8 text-[#1A3C5E] dark:text-[#F5F5F5]" />
             </div>
-            <CardTitle className="text-2xl font-bold">
+            <CardTitle className="text-2xl font-bold text-[#1A3C5E] dark:text-[#F5F5F5]">
               {isAdmin ? 'Create New User Account' : 'Create Your Account'}
             </CardTitle>
-            <CardDescription className="text-blue-100 dark:text-gray-300 mt-2">
+            <CardDescription className="text-[#6B5B95] dark:text-[#CCCCCC] mt-2">
               {isAdmin 
                 ? 'Register a new user with comprehensive information'
                 : 'Join our credit scoring platform with complete verification'
@@ -465,21 +375,21 @@ const EnhancedRegister = ({
         </CardHeader>
 
         <form onSubmit={handleSubmit}>
-          <CardContent className="p-8 space-y-8">
+          <CardContent className="p-4 sm:p-8 space-y-8 bg-white dark:bg-transparent">
             {/* Data Accuracy Notice */}
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+            <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-700 rounded-lg p-4 mb-6">
               <div className="flex items-start space-x-3">
                 <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
                 <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-amber-800 mb-1">
+                  <h3 className="text-sm font-semibold text-amber-800 dark:text-amber-200 mb-1">
                     ⚠️ Important: Complete and Accurate Information Required
                   </h3>
-                  <p className="text-sm text-amber-700 leading-relaxed">
+                  <p className="text-sm text-amber-700 dark:text-amber-100 leading-relaxed">
                     Please ensure all information provided is accurate and up-to-date. 
                     <strong className="font-semibold"> This information will be used for account verification and credit assessment.</strong> 
                     Inaccurate information may affect your account verification process.
                   </p>
-                  <div className="mt-2 text-xs text-amber-600">
+                  <div className="mt-2 text-xs text-amber-600 dark:text-amber-200">
                     <p>• Provide your real full name and contact information</p>
                     <p>• Use a valid email address for verification</p>
                     <p>• Ensure your National ID is correct</p>
@@ -492,13 +402,13 @@ const EnhancedRegister = ({
             {/* Personal Information Section */}
             <div className="space-y-6">
               <div className="flex items-center space-x-2">
-                <User className="h-5 w-5 text-blue-600" />
-                <h3 className="text-lg font-semibold">Personal Information</h3>
+                <User className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <h3 className="text-lg font-semibold text-[#1A3C5E] dark:text-[#F5F5F5]">Personal Information</h3>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <Label htmlFor="username">Username</Label>
+                  <Label htmlFor="username" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">Username *</Label>
                   <Input
                     id="username"
                     name="username"
@@ -509,12 +419,31 @@ const EnhancedRegister = ({
                     placeholder="Choose a unique username"
                     autoComplete="username"
                     required
+                    className="w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors"
                   />
-                  {errors.username && <div className="text-red-600 text-xs mt-1">{errors.username}</div>}
+                  {errors.username && <div className="text-[#DC3545] text-sm italic mt-1 animate-slide-in-top">{errors.username}</div>}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="fullName" className="text-gray-700 dark:text-gray-300">
+                  <Label htmlFor="email" className="block text-[#1A3C5E] text-lg font-bold mb-1">Email *</Label>
+                  <div className="relative">
+                    <Input
+                      id="email"
+                      type="email"
+                      value={formData.email}
+                      onChange={e => handleChange('email', e.target.value)}
+                      onBlur={() => handleBlur('email')}
+                      placeholder="your@email.com"
+                      className={`pl-10 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.email ? 'border-red-500' : ''}`}
+                      required
+                    />
+                    <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                  </div>
+                  {errors.email && <div className="text-[#DC3545] text-sm italic mt-1 animate-slide-in-top">{errors.email}</div>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="fullName" className="block text-[#1A3C5E] text-lg font-bold mb-1">
                     Full Name *
                   </Label>
                   <Input
@@ -523,16 +452,16 @@ const EnhancedRegister = ({
                     onChange={(e) => handleChange('fullName', e.target.value)}
                     onBlur={() => handleBlur('fullName')}
                     placeholder="Enter your full name"
-                    className={errors.fullName ? 'border-red-500' : ''}
+                    className={`w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.fullName ? 'border-red-500' : ''}`}
                     disabled={loading}
                   />
                   {errors.fullName && (
-                    <p className="text-xs text-red-600">{errors.fullName}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.fullName}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="phone" className="text-gray-700 dark:text-gray-300">
+                  <Label htmlFor="phone" className="block text-[#1A3C5E] text-lg font-bold mb-1">
                     Phone Number *
                   </Label>
                   <div className="relative">
@@ -542,18 +471,18 @@ const EnhancedRegister = ({
                       onChange={(e) => handleChange('phone', e.target.value)}
                       onBlur={() => handleBlur('phone')}
                       placeholder="+1 (555) 123-4567"
-                      className={`pl-10 ${errors.phone ? 'border-red-500' : ''}`}
+                      className={`pl-10 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.phone ? 'border-red-500' : ''}`}
                       disabled={loading}
                     />
                     <Phone className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   </div>
                   {errors.phone && (
-                    <p className="text-xs text-red-600">{errors.phone}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.phone}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="dateOfBirth" className="text-gray-700 dark:text-gray-300">
+                  <Label htmlFor="dateOfBirth" className="block text-[#1A3C5E] text-lg font-bold mb-1">
                     Date of Birth *
                   </Label>
                   <div className="relative">
@@ -563,18 +492,18 @@ const EnhancedRegister = ({
                       value={formData.dateOfBirth}
                       onChange={(e) => handleChange('dateOfBirth', e.target.value)}
                       onBlur={() => handleBlur('dateOfBirth')}
-                      className={`pl-10 ${errors.dateOfBirth ? 'border-red-500' : ''}`}
+                      className={`pl-10 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.dateOfBirth ? 'border-red-500' : ''}`}
                       disabled={loading}
                     />
                     <Calendar className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   </div>
                   {errors.dateOfBirth && (
-                    <p className="text-xs text-red-600">{errors.dateOfBirth}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.dateOfBirth}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="nationalId" className="text-gray-700 dark:text-gray-300">
+                  <Label htmlFor="nationalId" className="block text-[#1A3C5E] text-lg font-bold mb-1">
                     National ID *
                   </Label>
                   <div className="relative">
@@ -585,18 +514,18 @@ const EnhancedRegister = ({
                       onBlur={() => handleBlur('nationalId')}
                       placeholder="1234-5678-9012-3456"
                       mask="####-####-####-####"
-                      className={`pl-10 ${errors.nationalId ? 'border-red-500' : ''}`}
+                      className={`pl-10 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.nationalId ? 'border-red-500' : ''}`}
                       disabled={loading}
                     />
                     <CreditCard className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   </div>
                   {errors.nationalId && (
-                    <p className="text-xs text-red-600">{errors.nationalId}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.nationalId}</p>
                   )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="gender" className="text-gray-700 dark:text-gray-300">
+                  <Label htmlFor="gender" className="block text-[#1A3C5E] text-lg font-bold mb-1">
                     Gender
                   </Label>
                   <Select
@@ -604,10 +533,10 @@ const EnhancedRegister = ({
                     onValueChange={(value) => handleChange('gender', value)}
                     disabled={loading}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors">
                       <SelectValue placeholder="Select gender" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="z-[9999]">
                       <SelectItem value="male">Male</SelectItem>
                       <SelectItem value="female">Female</SelectItem>
                       <SelectItem value="other">Other</SelectItem>
@@ -615,10 +544,58 @@ const EnhancedRegister = ({
                     </SelectContent>
                   </Select>
                 </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="bankId" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">Bank *</Label>
+                  <Select
+                    value={formData.bankId}
+                    onValueChange={value => handleChange('bankId', value)}
+                    disabled={loading}
+                  >
+                    <SelectTrigger className={`h-12 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.bankId ? 'border-red-500' : ''}`}>
+                      <SelectValue placeholder="Select your bank" />
+                    </SelectTrigger>
+                    <SelectContent className="z-[9999]">
+                      <SelectItem value="CBE">Commercial Bank of Ethiopia</SelectItem>
+                      <SelectItem value="DBE">Development Bank of Ethiopia</SelectItem>
+                      <SelectItem value="AWASH">Awash Bank</SelectItem>
+                      <SelectItem value="DASHEN">Dashen Bank</SelectItem>
+                      <SelectItem value="ABYSSINIA">Bank of Abyssinia</SelectItem>
+                      <SelectItem value="WEGAGEN">Wegagen Bank</SelectItem>
+                      <SelectItem value="NIB">Nib International Bank</SelectItem>
+                      <SelectItem value="HIBRET">Hibret Bank</SelectItem>
+                      <SelectItem value="LION">Lion International Bank</SelectItem>
+                      <SelectItem value="COOP">Cooperative Bank of Oromia</SelectItem>
+                      <SelectItem value="ZEMEN">Zemen Bank</SelectItem>
+                      <SelectItem value="OROMIA">Oromia International Bank</SelectItem>
+                      <SelectItem value="BUNNA">Bunna Bank</SelectItem>
+                      <SelectItem value="BERHAN">Berhan Bank</SelectItem>
+                      <SelectItem value="ABAY">Abay Bank</SelectItem>
+                      <SelectItem value="ADDIS">Addis International Bank</SelectItem>
+                      <SelectItem value="DEBUB">Debub Global Bank</SelectItem>
+                      <SelectItem value="ENAT">Enat Bank</SelectItem>
+                      <SelectItem value="GADAA">Gadaa Bank</SelectItem>
+                      <SelectItem value="HIJRA">Hijra Bank</SelectItem>
+                      <SelectItem value="SHABELLE">Shabelle Bank</SelectItem>
+                      <SelectItem value="SIINQEE">Siinqee Bank</SelectItem>
+                      <SelectItem value="TSEHAY">Tsehay Bank</SelectItem>
+                      <SelectItem value="AMHARA">Amhara Bank</SelectItem>
+                      <SelectItem value="AHADU">Ahadu Bank</SelectItem>
+                      <SelectItem value="GOH">Goh Betoch Bank</SelectItem>
+                      <SelectItem value="AMAN">AMAN Bank</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {errors.bankId && (
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top flex items-center space-x-1">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{errors.bankId}</span>
+                    </p>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="address" className="text-gray-700 dark:text-gray-300">
+                <Label htmlFor="address" className="block text-[#1A3C5E] text-lg font-bold mb-1">
                   Address *
                 </Label>
                 <div className="relative">
@@ -628,13 +605,13 @@ const EnhancedRegister = ({
                     onChange={(e) => handleChange('address', e.target.value)}
                     onBlur={() => handleBlur('address')}
                     placeholder="Enter your full address"
-                    className={`pl-10 ${errors.address ? 'border-red-500' : ''}`}
+                    className={`w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.address ? 'border-red-500' : ''}`}
                     disabled={loading}
                   />
                   <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                 </div>
                 {errors.address && (
-                  <p className="text-xs text-red-600">{errors.address}</p>
+                  <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.address}</p>
                 )}
               </div>
             </div>
@@ -644,78 +621,36 @@ const EnhancedRegister = ({
             {/* Account Type Section */}
             <div className="space-y-6">
               <div className="flex items-center space-x-2">
-                <Building className="h-5 w-5 text-blue-600" />
-                <h3 className="text-lg font-semibold">Account Type</h3>
+                <User className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <h3 className="text-lg font-semibold text-[#1A3C5E] dark:text-[#F5F5F5]">Account Type</h3>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label htmlFor="role" className="text-gray-700 dark:text-gray-300">
-                    Account Type *
+              <div className="space-y-4">
+                <div className="space-y-3">
+                  <Label htmlFor="role" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">
+                    Select Account Type *
                   </Label>
                   <Select
                     value={formData.role}
                     onValueChange={(value) => handleChange('role', value)}
                     disabled={loading}
                   >
-                    <SelectTrigger className={errors.role ? 'border-red-500' : ''}>
-                      <SelectValue placeholder="Select account type" />
+                    <SelectTrigger className={`h-12 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.role ? 'border-red-500' : ''}`}>
+                      <SelectValue placeholder="Choose your account type" />
                     </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="user">
-                        <div className="flex items-center space-x-2">
-                          <span>Borrower</span>
-                          <Badge variant="secondary">Check credit score</Badge>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="premium">
-                        <div className="flex items-center space-x-2">
-                          <span>Premium User</span>
-                          <Badge variant="premium">Advanced tools</Badge>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="lender">
-                        <div className="flex items-center space-x-2">
-                          <span>Lender</span>
-                          <Badge variant="outline">Scoring tools</Badge>
-                        </div>
-                      </SelectItem>
-                      {isAdmin && (
-                        <SelectItem value="admin">
-                          <div className="flex items-center space-x-2">
-                            <span>Administrator</span>
-                            <Badge variant="destructive">Full access</Badge>
-                          </div>
-                        </SelectItem>
-                      )}
+                    <SelectContent className="z-[9999]">
+                      <SelectItem value="user">Borrower - Basic</SelectItem>
+                      <SelectItem value="premium">Premium User - Advanced</SelectItem>
+                      <SelectItem value="lender">Lender - Professional</SelectItem>
                     </SelectContent>
                   </Select>
                   {errors.role && (
-                    <p className="text-xs text-red-600">{errors.role}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top flex items-center space-x-1">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{errors.role}</span>
+                    </p>
                   )}
                 </div>
-
-                {isAdmin && (
-                  <div className="space-y-2">
-                    <Label htmlFor="badgeTier" className="text-gray-700 dark:text-gray-300">
-                      Badge Tier
-                    </Label>
-                    <Select
-                      value={formData.badgeTier}
-                      onValueChange={(value) => handleChange('badgeTier', value)}
-                      disabled={loading}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select badge tier" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="basic">Basic</SelectItem>
-                        <SelectItem value="premium">Premium</SelectItem>
-                        <SelectItem value="enterprise">Enterprise</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
               </div>
             </div>
 
@@ -724,13 +659,14 @@ const EnhancedRegister = ({
             {/* Employment Details Section */}
             <div className="space-y-6">
               <div className="flex items-center space-x-2">
-                <Building className="h-5 w-5 text-blue-600" />
-                <h3 className="text-lg font-semibold">Employment Details</h3>
+                <Briefcase className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <h3 className="text-lg font-semibold text-[#1A3C5E] dark:text-[#F5F5F5]">Employment Details</h3>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="space-y-2">
-                  <Label htmlFor="employmentStatus" className="text-gray-700 dark:text-gray-300">
+              <div className="space-y-6">
+                {/* Employment Status */}
+                <div className="space-y-3">
+                  <Label htmlFor="employmentStatus" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">
                     Employment Status *
                   </Label>
                   <Select
@@ -738,10 +674,10 @@ const EnhancedRegister = ({
                     onValueChange={(value) => handleChange('employmentStatus', value)}
                     disabled={loading}
                   >
-                    <SelectTrigger className={errors.employmentStatus ? 'border-red-500' : ''}>
-                      <SelectValue placeholder="Select employment status" />
+                    <SelectTrigger className={`h-12 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.employmentStatus ? 'border-red-500' : ''}`}>
+                      <SelectValue placeholder="Select your employment status" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="z-[9999]">
                       <SelectItem value="employed">Employed</SelectItem>
                       <SelectItem value="self-employed">Self-Employed</SelectItem>
                       <SelectItem value="unemployed">Unemployed</SelectItem>
@@ -750,52 +686,62 @@ const EnhancedRegister = ({
                     </SelectContent>
                   </Select>
                   {errors.employmentStatus && (
-                    <p className="text-xs text-red-600">{errors.employmentStatus}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top flex items-center space-x-1">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{errors.employmentStatus}</span>
+                    </p>
                   )}
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="employerName" className="text-gray-700 dark:text-gray-300">
-                    Employer Name
-                  </Label>
-                  <Input
-                    id="employerName"
-                    value={formData.employerName}
-                    onChange={(e) => handleChange('employerName', e.target.value)}
-                    placeholder="Company name"
-                    disabled={loading}
-                  />
-                </div>
-              </div>
+                {/* Employer Name and Industry */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <Label htmlFor="employerName" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">
+                      Employer Name
+                    </Label>
+                    <Input
+                      id="employerName"
+                      value={formData.employerName}
+                      onChange={(e) => handleChange('employerName', e.target.value)}
+                      placeholder="Enter company name"
+                      className="h-12 border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors"
+                      disabled={loading}
+                    />
+                  </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="industry" className="text-gray-700 dark:text-gray-300">
-                  Industry *
-                </Label>
-                <Select
-                  value={formData.industry}
-                  onValueChange={(value) => handleChange('industry', value)}
-                  disabled={loading}
-                >
-                  <SelectTrigger className={errors.industry ? 'border-red-500' : ''}>
-                    <SelectValue placeholder="Select industry" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="technology">Technology</SelectItem>
-                    <SelectItem value="finance">Finance</SelectItem>
-                    <SelectItem value="healthcare">Healthcare</SelectItem>
-                    <SelectItem value="education">Education</SelectItem>
-                    <SelectItem value="retail">Retail</SelectItem>
-                    <SelectItem value="manufacturing">Manufacturing</SelectItem>
-                    <SelectItem value="agriculture">Agriculture</SelectItem>
-                    <SelectItem value="construction">Construction</SelectItem>
-                    <SelectItem value="transportation">Transportation</SelectItem>
-                    <SelectItem value="other">Other</SelectItem>
-                  </SelectContent>
-                </Select>
-                {errors.industry && (
-                  <p className="text-xs text-red-600">{errors.industry}</p>
-                )}
+                  <div className="space-y-3">
+                    <Label htmlFor="industry" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">
+                      Industry *
+                    </Label>
+                    <Select
+                      value={formData.industry}
+                      onValueChange={(value) => handleChange('industry', value)}
+                      disabled={loading}
+                    >
+                      <SelectTrigger className={`h-12 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.industry ? 'border-red-500' : ''}`}>
+                        <SelectValue placeholder="Select your industry" />
+                      </SelectTrigger>
+                      <SelectContent className="z-[9999]">
+                        <SelectItem value="technology">Technology</SelectItem>
+                        <SelectItem value="finance">Finance</SelectItem>
+                        <SelectItem value="healthcare">Healthcare</SelectItem>
+                        <SelectItem value="education">Education</SelectItem>
+                        <SelectItem value="retail">Retail</SelectItem>
+                        <SelectItem value="manufacturing">Manufacturing</SelectItem>
+                        <SelectItem value="agriculture">Agriculture</SelectItem>
+                        <SelectItem value="construction">Construction</SelectItem>
+                        <SelectItem value="transportation">Transportation</SelectItem>
+                        <SelectItem value="other">Other</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {errors.industry && (
+                      <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top flex items-center space-x-1">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{errors.industry}</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -804,13 +750,13 @@ const EnhancedRegister = ({
             {/* Security Section */}
             <div className="space-y-6">
               <div className="flex items-center space-x-2">
-                <Shield className="h-5 w-5 text-blue-600" />
-                <h3 className="text-lg font-semibold">Security & Legal</h3>
+                <Shield className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                <h3 className="text-lg font-semibold text-[#1A3C5E] dark:text-[#F5F5F5]">Security & Legal</h3>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <Label htmlFor="password" className="text-gray-700 dark:text-gray-300">
+                  <Label htmlFor="password" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">
                     Password *
                   </Label>
                   <div className="relative">
@@ -821,7 +767,7 @@ const EnhancedRegister = ({
                       onChange={(e) => handleChange('password', e.target.value)}
                       onBlur={() => handleBlur('password')}
                       placeholder="••••••••"
-                      className={`pr-10 ${errors.password ? 'border-red-500' : ''}`}
+                      className={`pr-10 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.password ? 'border-red-500' : ''}`}
                       disabled={loading}
                     />
                     <button
@@ -833,13 +779,13 @@ const EnhancedRegister = ({
                     </button>
                   </div>
                   {errors.password && (
-                    <p className="text-xs text-red-600">{errors.password}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.password}</p>
                   )}
                   <PasswordStrengthMeter password={formData.password} />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="confirmPassword" className="text-gray-700 dark:text-gray-300">
+                  <Label htmlFor="confirmPassword" className="block text-[#1A3C5E] dark:text-[#F5F5F5] text-lg font-bold mb-1">
                     Confirm Password *
                   </Label>
                   <div className="relative">
@@ -850,7 +796,7 @@ const EnhancedRegister = ({
                       onChange={(e) => handleChange('confirmPassword', e.target.value)}
                       onBlur={() => handleBlur('confirmPassword')}
                       placeholder="••••••••"
-                      className={`pr-10 ${errors.confirmPassword ? 'border-red-500' : ''}`}
+                      className={`pr-10 w-full border border-[#2EB9DF] rounded-lg px-4 py-3 text-base bg-white dark:bg-[#22232b] text-[#1A3C5E] dark:text-[#F5F5F5] placeholder-[#6B5B95] dark:placeholder-[#CCCCCC] focus:border-[#FFD700] focus:ring-2 focus:ring-[#FFD700] transition-colors ${errors.confirmPassword ? 'border-red-500' : ''}`}
                       disabled={loading}
                     />
                     <button
@@ -862,7 +808,7 @@ const EnhancedRegister = ({
                     </button>
                   </div>
                   {errors.confirmPassword && (
-                    <p className="text-xs text-red-600">{errors.confirmPassword}</p>
+                    <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.confirmPassword}</p>
                   )}
                 </div>
               </div>
@@ -885,7 +831,7 @@ const EnhancedRegister = ({
                   </div>
                 </div>
                 {errors.authorizeCreditChecks && (
-                  <p className="text-xs text-red-600">{errors.authorizeCreditChecks}</p>
+                  <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.authorizeCreditChecks}</p>
                 )}
 
                 <div className="flex items-start space-x-3">
@@ -905,72 +851,10 @@ const EnhancedRegister = ({
                   </div>
                 </div>
                 {errors.agreeTerms && (
-                  <p className="text-xs text-red-600">{errors.agreeTerms}</p>
+                  <p className="text-xs text-[#DC3545] italic mt-1 animate-slide-in-top">{errors.agreeTerms}</p>
                 )}
               </div>
             </div>
-
-            {/* Admin Only Section */}
-            {isAdmin && (
-              <>
-                <Separator />
-                <div className="space-y-6">
-                  <div className="flex items-center space-x-2">
-                    <Info className="h-5 w-5 text-blue-600" />
-                    <h3 className="text-lg font-semibold">Administrative Settings</h3>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                      <Label htmlFor="initialCreditScore" className="text-gray-700 dark:text-gray-300">
-                        Initial Credit Score
-                      </Label>
-                      <Input
-                        id="initialCreditScore"
-                        type="number"
-                        value={formData.initialCreditScore}
-                        onChange={(e) => handleChange('initialCreditScore', e.target.value)}
-                        placeholder="750"
-                        min="300"
-                        max="850"
-                        disabled={loading}
-                      />
-                      <p className="text-xs text-gray-500">Range: 300-850</p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="sourceNotes" className="text-gray-700 dark:text-gray-300">
-                        Source Notes
-                      </Label>
-                      <Input
-                        id="sourceNotes"
-                        value={formData.sourceNotes}
-                        onChange={(e) => handleChange('sourceNotes', e.target.value)}
-                        placeholder="e.g., Came from branch office"
-                        disabled={loading}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-start space-x-3">
-                    <Checkbox
-                      id="branchVerification"
-                      checked={formData.branchVerification}
-                      onCheckedChange={(checked) => handleChange('branchVerification', checked)}
-                      disabled={loading}
-                    />
-                    <div className="space-y-1">
-                      <Label htmlFor="branchVerification" className="text-sm font-medium">
-                        Branch Verification Completed
-                      </Label>
-                      <p className="text-xs text-gray-500">
-                        Check if user has completed in-person verification at branch
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
 
             {/* Pending Verification Notice */}
             {showPendingMessage && (
@@ -991,22 +875,22 @@ const EnhancedRegister = ({
             )}
           </CardContent>
 
-          <CardFooter className="p-6 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-            <div className="flex justify-between items-center w-full">
+          <CardFooter className="p-4 sm:p-6 border-t border-[#6B5B95] bg-white dark:bg-transparent">
+            <div className="flex flex-col sm:flex-row justify-between items-center w-full gap-4">
               {onClose && (
                 <Button
                   type="button"
                   variant="outline"
                   onClick={onClose}
                   disabled={loading}
+                  className="w-full sm:w-auto border border-[#CED4DA] text-[#1A3C5E] font-bold rounded-lg py-2 px-6"
                 >
                   Cancel
                 </Button>
               )}
-              
               <Button
                 type="submit"
-                className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-800 px-8"
+                className="w-full bg-[#2EB9DF] hover:bg-[#138496] text-white text-lg font-bold rounded-lg py-3 transition-colors disabled:bg-[#6C757D] flex items-center justify-center"
                 disabled={loading}
               >
                 {loading ? (
@@ -1026,4 +910,4 @@ const EnhancedRegister = ({
   );
 };
 
-export default EnhancedRegister; 
+export default EnhancedRegister;

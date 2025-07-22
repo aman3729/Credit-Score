@@ -319,4 +319,4 @@ const ImprovementTipsEngine = ({ userData, scoreResult }) => {
   );
 };
 
-export default ImprovementTipsEngine; 
+export default React.memo(ImprovementTipsEngine); 

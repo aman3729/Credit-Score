@@ -21,12 +21,39 @@ import {
   TrendingUp,
   Filter,
   RefreshCw,
-  Loader2
+  Loader2,
+  Upload,
+  UserPlus,
+  Flag,
+  CheckSquare,
+  Square,
+  Calculator,
+  Shield,
+  AlertOctagon,
+  TrendingDown
 } from 'lucide-react';
 import axios from 'axios';
 import AdminBatchUpload from './AdminBatchUpload';
 import { Modal } from 'antd';
 import EnhancedRegister from './EnhancedRegister';
+import LoanDecisionStatus from './LoanDecisionStatus';
+import BorrowerSnapshot from './LenderDashboard/BorrowerSnapshot.jsx';
+import BorrowerList from './LenderDashboard/BorrowerList.jsx';
+import MetricsPanel from './LenderDashboard/MetricsPanel.jsx';
+import ManualDecisionForm from './LenderDashboard/ManualDecisionForm.jsx';
+import BatchUploadDialog from './LenderDashboard/dialogs/BatchUploadDialog.jsx';
+import RegisterUserDialog from './LenderDashboard/dialogs/RegisterUserDialog.jsx';
+import {
+  searchUsers,
+  fetchUserCreditData,
+  fetchDashboardMetrics,
+  fetchRecentDecisions,
+  fetchAlerts,
+  manualRefresh
+} from './LenderDashboard/utils.js';
+import LoanSimulationPanel from './LenderDashboard/LoanSimulationPanel.jsx';
+import AlertsPanel from './LenderDashboard/AlertsPanel.jsx';
+import RecentDecisionsPanel from './LenderDashboard/RecentDecisionsPanel.jsx';
 
 // UI Components
 import { Input } from './ui/input';
@@ -38,13 +65,18 @@ import { Separator } from './ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Label } from './ui/label';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
+import { Textarea } from './ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Slider } from './ui/slider';
+import { Switch } from './ui/switch';
 import { useToast } from '../hooks/use-toast';
 import { useAuth } from "../contexts/AuthContext";
 import { api } from "../lib/api";
+import RiskTierOverridePanel from './LenderDashboard/RiskTierOverridePanel.jsx';
+import BatchUploadResults from './LenderDashboard/BatchUploadResults.jsx';
+import DecisionBadge from './LenderDashboard/DecisionBadge.jsx';
+import LendingDecisionDetails from './LenderDashboard/LendingDecisionDetails.jsx';
 
-// Reasoning Components
-import CreditInsights from './CreditInsights';
-import ImprovementTipsEngine from './ImprovementTipsEngine';
 
 const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
   const navigate = useNavigate();
@@ -65,8 +97,28 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
     notes: '',
     amount: '',
     term: '',
-    interestRate: ''
+    interestRate: '',
+    rejectionReason: '',
+    flagForReview: false,
+    reviewNote: '',
+    riskTierOverride: '',
+    overrideJustification: '',
+    loanType: '' // Added loanType
   });
+  
+  // Loan simulation state
+  const [loanSimulation, setLoanSimulation] = useState({
+    amount: 10000,
+    term: 36,
+    rate: 8.5,
+    monthlyPayment: 0,
+    totalInterest: 0,
+    apr: 0,
+    dti: 0,
+    autoReject: false
+  });
+  
+  const [showLoanSimulation, setShowLoanSimulation] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
   const [dashboardMetrics, setDashboardMetrics] = useState({
     approvedLoans: 0,
@@ -84,9 +136,9 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
   const [editingIncome, setEditingIncome] = useState(false);
   const [newIncome, setNewIncome] = useState('');
   const [recalcLoading, setRecalcLoading] = useState(false);
-  const [decisionData, setDecisionData] = useState(null);
-  const [decisionLoading, setDecisionLoading] = useState(false);
-  const [decisionError, setDecisionError] = useState(null);
+  const [hasCollateral, setHasCollateral] = useState(false);
+  const [collateralValue, setCollateralValue] = useState(0);
+
   const [showBatchUpload, setShowBatchUpload] = useState(false);
   const [batchResults, setBatchResults] = useState(null);
   const [showRegister, setShowRegister] = useState(false);
@@ -94,41 +146,21 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
   const searchTimeoutRef = useRef(null);
   const intervalRef = useRef(null);
 
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Production-ready polling with exponential backoff and intelligent intervals
+  const [pollingState, setPollingState] = useState({
+    isActive: false,
+    lastError: null,
+    consecutiveErrors: 0,
+    baseInterval: 30000, // 30 seconds
+    maxInterval: 300000, // 5 minutes
+    currentInterval: 30000
+  });
+
+
+
   // Search users with debounce
-  const searchUsers = useCallback(async (query = '') => {
-    if (!query.trim()) {
-      setUsers([]);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      const response = await api.get(`/lenders/search-borrowers?search=${encodeURIComponent(query)}`);
-      const usersList = Array.isArray(response.data.data) ? response.data.data : [];
-      setUsers(usersList);
-    } catch (err) {
-      console.error('Error searching users:', err);
-      if (err.response?.status === 401 || err.response?.status === 403) {
-        toast({
-          title: 'Session expired',
-          description: 'Please log in again',
-          variant: 'destructive',
-        });
-        logout();
-        navigate('/login');
-      } else {
-        toast({
-          title: 'Error',
-          description: 'Failed to search users',
-          variant: 'destructive',
-        });
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [navigate, logout, toast]);
-
-  // Handle search input with debounce
   const handleSearch = (e) => {
     const query = e.target.value;
     setSearchQuery(query);
@@ -136,7 +168,7 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     
     searchTimeoutRef.current = setTimeout(() => {
-      searchUsers(query);
+      searchUsers(query, setUsers, setLoading, toast, logout, navigate);
     }, 500);
   };
 
@@ -151,23 +183,45 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
       const response = await api.get(`/user/${userId}/credit-data`);
       const responseData = response.data.data || response.data;
       
+      console.log('DEBUG: API Response for user credit data:', {
+        userId,
+        hasLendingDecision: !!responseData.lendingDecision,
+        lendingDecisionKeys: responseData.lendingDecision ? Object.keys(responseData.lendingDecision) : [],
+        currentScore: responseData.currentScore,
+        hasHistory: Array.isArray(responseData.lendingDecisionHistory),
+        historyLength: responseData.lendingDecisionHistory?.length || 0
+      });
+      
       if (!responseData) throw new Error('No data received from server');
       
-      // Always use the latest lending decision, falling back to the most recent in lendingDecisionHistory
+      // Always use the fresh lending decision from the API response
+      // The API should generate a fresh decision, so we should always use responseData.lendingDecision
       let latestLendingDecision = responseData.lendingDecision;
-      if (
-        (!latestLendingDecision || Object.keys(latestLendingDecision).length === 0 || latestLendingDecision.decision === undefined)
-        && Array.isArray(responseData.lendingDecisionHistory)
-        && responseData.lendingDecisionHistory.length > 0
-      ) {
-        latestLendingDecision = responseData.lendingDecisionHistory[responseData.lendingDecisionHistory.length - 1];
+      
+      // Only fall back to history if the fresh decision is completely missing
+      if (!latestLendingDecision || Object.keys(latestLendingDecision).length === 0) {
+        console.warn('No fresh lending decision found, falling back to history');
+        if (Array.isArray(responseData.lendingDecisionHistory) && responseData.lendingDecisionHistory.length > 0) {
+          latestLendingDecision = responseData.lendingDecisionHistory[responseData.lendingDecisionHistory.length - 1];
+          console.warn('Using historical lending decision:', latestLendingDecision);
+        }
+      } else {
+        console.log('Using fresh lending decision:', latestLendingDecision);
       }
-      setUserCreditData({
+      
+      const userData = {
         userId,
         ...responseData,
         currentScore: responseData.currentScore,
         lendingDecision: latestLendingDecision,
-      });
+      };
+      
+      setUserCreditData(userData);
+      
+      // Also update loan offer to ensure consistency
+      if (latestLendingDecision) {
+        setLoanOffer(latestLendingDecision);
+      }
     } catch (err) {
       const errorMessage = err.response?.data?.error || err.message || 'Failed to load credit data';
       setCreditDataError(errorMessage);
@@ -190,9 +244,8 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
     setLoadingLoanOffer(true);
 
     try {
-      const offerRes = await api.get(`/lenders/lending-decision/${user._id}`);
-      if (offerRes.data?.data) setLoanOffer(offerRes.data.data);
-      fetchUserCreditData(user._id);
+      // Fetch user credit data - it should contain the fresh lending decision
+      await fetchUserCreditData(user._id);
     } catch (err) {
       toast({
         title: 'Error',
@@ -216,7 +269,13 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
       notes: '',
       amount: '',
       term: '',
-      interestRate: ''
+      interestRate: '',
+      rejectionReason: '',
+      flagForReview: false,
+      reviewNote: '',
+      riskTierOverride: '',
+      overrideJustification: '',
+      loanType: ''
     });
     setActiveTab('overview');
   }, []);
@@ -252,22 +311,19 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
   const fetchRecentDecisions = useCallback(async () => {
     try {
       const response = await api.get('/lenders/recent-decisions?limit=5');
-      setRecentDecisions(response.data.data?.decisions || []);
+      return response.data.data?.decisions || [];
     } catch (error) {
-      setRecentDecisions([]);
+      return [];
     }
   }, []);
 
-  // Fetch alerts
-  const fetchAlerts = useCallback(async () => {
+  // Fetch alerts, now accepts recentDecisions as argument
+  const fetchAlerts = useCallback(async (recentDecisions) => {
     try {
-      const decisions = await fetchRecentDecisions();
       const alerts = [];
-      
-      const highRiskCount = decisions.filter(d => 
+      const highRiskCount = recentDecisions.filter(d => 
         (d.creditScore?.fico?.score || 0) < 670
       ).length;
-      
       if (highRiskCount > 2) {
         alerts.push({
           type: 'critical',
@@ -276,12 +332,105 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
           time: '2 hours ago'
         });
       }
-      
       setAlerts(alerts);
     } catch (error) {
       setAlerts([]);
     }
-  }, [fetchRecentDecisions]);
+  }, []);
+
+  // Manual refresh function for user-initiated updates
+  const manualRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchDashboardMetrics();
+      const recentDecisions = await fetchRecentDecisions();
+      setRecentDecisions(recentDecisions);
+      await fetchAlerts(recentDecisions);
+      toast({
+        title: 'Refreshed',
+        description: 'Latest data has been refreshed',
+        variant: 'default'
+      });
+    } catch (error) {
+      toast({
+        title: 'Refresh Failed',
+        description: error.response?.data?.error || 'Failed to refresh data',
+        variant: 'destructive'
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [fetchDashboardMetrics, fetchRecentDecisions, fetchAlerts, toast]);
+
+  // Intelligent polling based on user activity and errors
+  const startPolling = useCallback(() => {
+    if (pollingState.isActive) return;
+    setPollingState(prev => ({ ...prev, isActive: true }));
+    const poll = async () => {
+      try {
+        if (document.visibilityState === 'visible') {
+          await fetchDashboardMetrics();
+          const recentDecisions = await fetchRecentDecisions();
+          setRecentDecisions(recentDecisions);
+          await fetchAlerts(recentDecisions);
+          setPollingState(prev => ({
+            ...prev,
+            consecutiveErrors: 0,
+            currentInterval: prev.baseInterval,
+            lastError: null
+          }));
+        }
+      } catch (error) {
+        console.warn('Polling error:', error);
+        setPollingState(prev => {
+          const newErrorCount = prev.consecutiveErrors + 1;
+          const isRateLimit = error.response?.status === 429;
+          const backoffMultiplier = isRateLimit ? Math.pow(2, newErrorCount) : newErrorCount;
+          const newInterval = Math.min(
+            prev.baseInterval * backoffMultiplier,
+            prev.maxInterval
+          );
+          return {
+            ...prev,
+            consecutiveErrors: newErrorCount,
+            currentInterval: newInterval,
+            lastError: error,
+            isActive: newErrorCount < 10
+          };
+        });
+      }
+    };
+    poll();
+    const interval = setInterval(() => {
+      if (!pollingState.isActive) {
+        clearInterval(interval);
+        return;
+      }
+      poll();
+    }, pollingState.currentInterval);
+    return () => clearInterval(interval);
+  }, [pollingState.isActive, pollingState.currentInterval, fetchDashboardMetrics, fetchRecentDecisions, fetchAlerts]);
+
+  // Handle visibility change to pause/resume polling
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Resume polling when tab becomes visible
+        if (!pollingState.isActive) {
+          startPolling();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [pollingState.isActive, startPolling]);
+
+  // Start polling when component mounts
+  useEffect(() => {
+    const cleanup = startPolling();
+    return cleanup;
+  }, [startPolling]);
 
   // Save manual decision
   const saveManualDecision = async () => {
@@ -296,10 +445,22 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
 
     try {
       await api.post(`/lenders/save-decision/${userCreditData.userId}`, {
-        ...manualDecision,
+        decision: manualDecision.decision,
+        notes: manualDecision.notes,
         isManual: true,
         reasons: userCreditData?.lendingDecision?.reasons || [],
         recommendations: userCreditData?.lendingDecision?.recommendations || [],
+        loanDetails: {
+          amount: manualDecision.amount,
+          term: manualDecision.term,
+          interestRate: manualDecision.interestRate
+        },
+        loanType: manualDecision.loanType, // <-- add this line
+        rejectionReason: manualDecision.rejectionReason,
+        flagForReview: manualDecision.flagForReview,
+        reviewNote: manualDecision.reviewNote,
+        riskTierOverride: manualDecision.riskTierOverride,
+        overrideJustification: manualDecision.overrideJustification
       });
       
       setUserCreditData(prev => ({
@@ -313,7 +474,13 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
             amount: manualDecision.amount,
             term: manualDecision.term,
             interestRate: manualDecision.interestRate
-          }
+          },
+          loanType: manualDecision.loanType, // <-- add this line
+          rejectionReason: manualDecision.rejectionReason,
+          flagForReview: manualDecision.flagForReview,
+          reviewNote: manualDecision.reviewNote,
+          riskTierOverride: manualDecision.riskTierOverride,
+          overrideJustification: manualDecision.overrideJustification
         }
       }));
       
@@ -335,14 +502,22 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
 
   // Start editing the decision
   const startEditingDecision = () => {
+    console.log('startEditingDecision called', { userCreditData });
     setManualDecision({
       decision: userCreditData?.lendingDecision?.decision || 'Review',
       notes: userCreditData?.lendingDecision?.manualNotes || '',
       amount: userCreditData?.lendingDecision?.loanDetails?.amount || '',
       term: userCreditData?.lendingDecision?.loanDetails?.term || '',
-      interestRate: userCreditData?.lendingDecision?.loanDetails?.interestRate || ''
+      interestRate: userCreditData?.lendingDecision?.loanDetails?.interestRate || '',
+      rejectionReason: userCreditData?.lendingDecision?.rejectionReason || '',
+      flagForReview: userCreditData?.lendingDecision?.flagForReview || false,
+      reviewNote: userCreditData?.lendingDecision?.reviewNote || '',
+      riskTierOverride: userCreditData?.lendingDecision?.riskTierOverride || '',
+      overrideJustification: userCreditData?.lendingDecision?.overrideJustification || '',
+      loanType: userCreditData?.lendingDecision?.loanType || '' // Add loanType to manualDecision
     });
     setIsEditingDecision(true);
+    console.log('isEditingDecision set to true');
   };
 
   // Handler to submit new income and recalculate
@@ -366,6 +541,34 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
     } finally {
       setRecalcLoading(false);
       setEditingIncome(false);
+    }
+  };
+
+  // Handler to recalculate with collateral
+  const recalculateWithCollateral = async () => {
+    if (!selectedUser) return;
+    setRecalcLoading(true);
+    try {
+      const res = await api.post(`/lenders/lending-decision/${selectedUser._id}/recalculate`, {
+        collateralValue: hasCollateral ? Number(collateralValue) : 0
+      });
+      if (res.data?.offer) {
+        setLoanOffer(res.data.offer);
+        toast({ 
+          title: 'Loan offer recalculated', 
+          description: hasCollateral 
+            ? `New offer with collateral value $${collateralValue.toLocaleString()}` 
+            : 'New offer without collateral' 
+        });
+      }
+    } catch (err) {
+      toast({ 
+        title: 'Error', 
+        description: err.response?.data?.error || err.message, 
+        variant: 'destructive' 
+      });
+    } finally {
+      setRecalcLoading(false);
     }
   };
 
@@ -423,27 +626,75 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
     }
   };
 
-  // New function to fetch decision by phone number
-  const fetchDecisionByPhone = async (phone) => {
-    setDecisionLoading(true);
-    setDecisionError(null);
-    setDecisionData(null);
+  // Handle decision actions from LoanDecisionStatus component
+  const handleDecisionAction = async (action) => {
+    if (!selectedUser) return;
+
     try {
-      const res = await axios.get(`/api/creditScore/decision/${encodeURIComponent(phone)}`);
-      setDecisionData(res.data);
-    } catch (err) {
-      setDecisionError(err.response?.data?.error || err.message || 'Failed to fetch decision');
-    } finally {
-      setDecisionLoading(false);
+      switch (action) {
+        case 'approve':
+          await api.post(`/lenders/save-decision/${selectedUser._id}`, {
+            decision: 'Approve',
+            notes: 'Final offer approved by lender',
+            isManual: true
+          });
+          toast({ 
+            title: 'Offer Approved', 
+            description: 'Final offer has been approved.' 
+          });
+          break;
+
+        case 'edit':
+          // Trigger edit mode for loan offer
+          setIsEditingDecision(true);
+          toast({ 
+            title: 'Edit Mode', 
+            description: 'You can now edit the loan offer terms.' 
+          });
+          break;
+
+        case 'download':
+          // Generate and download PDF
+          toast({ 
+            title: 'Download Started', 
+            description: 'PDF summary is being generated...' 
+          });
+          // Here you would implement PDF generation
+          break;
+
+        case 'send':
+          await sendOffer();
+          break;
+
+        case 'decline':
+          await declineOffer();
+          break;
+
+        case 'hold':
+          await api.post(`/lenders/save-decision/${selectedUser._id}`, {
+            decision: 'Hold',
+            notes: 'Application put on hold by lender',
+            isManual: true
+          });
+          toast({ 
+            title: 'Application on Hold', 
+            description: 'Application has been put on hold.' 
+          });
+          break;
+
+        default:
+          break;
+      }
+    } catch (error) {
+      toast({ 
+        title: 'Error', 
+        description: error.response?.data?.error || error.message, 
+        variant: 'destructive' 
+      });
     }
   };
 
-  // Add a search bar for phone number
-  const handlePhoneSearch = async (e) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-    fetchDecisionByPhone(searchQuery.trim());
-  };
+
 
   // Cleanup on unmount
   useEffect(() => {
@@ -457,278 +708,269 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
   }, []);
 
   // Fetch initial data
+  // Initialize dashboard data (no polling - handled by startPolling)
   useEffect(() => {
     fetchDashboardMetrics();
     fetchRecentDecisions();
     fetchAlerts();
-    
-    const interval = setInterval(() => {
-      fetchDashboardMetrics();
-      fetchRecentDecisions();
-      fetchAlerts();
-    }, 30000);
-    
-    intervalRef.current = interval;
-    
-    return () => clearInterval(interval);
-  }, [fetchDashboardMetrics, fetchRecentDecisions, fetchAlerts]);
-
-  // Render decision badge
-  const renderDecisionBadge = (decision, size = 'default') => {
-    const baseClasses = 'inline-flex items-center rounded-full text-xs font-medium';
-    const sizeClasses = size === 'large' ? 'px-3 py-1 text-sm' : 'px-2.5 py-0.5 text-xs';
-    const iconSize = size === 'large' ? 'h-4 w-4' : 'h-3 w-3';
-    
-    switch(decision?.toLowerCase()) {
-      case 'approve':
-        return <span className={`${baseClasses} ${sizeClasses} bg-green-100 text-green-800`}>
-          <CheckCircle2 className={`${iconSize} mr-1`} />
-          Approved
-        </span>;
-      case 'reject':
-        return <span className={`${baseClasses} ${sizeClasses} bg-red-100 text-red-800`}>
-          <XCircle className={`${iconSize} mr-1`} />
-          Rejected
-        </span>;
-      case 'review':
-      default:
-        return <span className={`${baseClasses} ${sizeClasses} bg-yellow-100 text-yellow-800`}>
-          <AlertCircle className={`${iconSize} mr-1`} />
-          Review
-        </span>;
-    }
-  };
+  }, []); // Only run once on mount
 
   // Handle manual decision change
   const handleManualDecision = (field, value) => {
     setManualDecision(prev => ({ ...prev, [field]: value }));
   };
 
-  // Render dashboard metrics
-  const renderMetrics = () => (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-      {[
-        { 
-          title: 'Approved Loans', 
-          value: dashboardMetrics.approvedLoans, 
-          icon: CheckCircle2, 
-          color: 'green' 
-        },
-        { 
-          title: 'Pending Loans', 
-          value: dashboardMetrics.pendingLoans, 
-          icon: Clock, 
-          color: 'yellow' 
-        },
-        { 
-          title: 'Rejected Loans', 
-          value: dashboardMetrics.rejectedLoans, 
-          icon: XCircle, 
-          color: 'red' 
-        },
-        { 
-          title: 'Avg. Decision Time', 
-          value: dashboardMetrics.avgDecisionTime, 
-          icon: BarChart4, 
-          color: 'blue' 
-        }
-      ].map((metric, index) => (
-        <Card key={index} className={`border-l-4 border-${metric.color}-500`}>
-          <CardContent className="p-4">
-            <div className="flex justify-between items-center">
-              <div>
-                <p className="text-sm text-muted-foreground">{metric.title}</p>
-                <h3 className="text-2xl font-bold">{metric.value}</h3>
-              </div>
-              <div className={`bg-${metric.color}-100 p-3 rounded-full`}>
-                <metric.icon className={`h-6 w-6 text-${metric.color}-600`} />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
+  // Calculate loan payments and metrics
+  const calculateLoanMetrics = (amount, term, rate, monthlyIncome = 0) => {
+    const monthlyRate = rate / 100 / 12;
+    const numberOfPayments = term;
+    
+    if (monthlyRate === 0) {
+      return {
+        monthlyPayment: amount / numberOfPayments,
+        totalInterest: 0,
+        apr: rate
+      };
+    }
+    
+    const monthlyPayment = (amount * monthlyRate * Math.pow(1 + monthlyRate, numberOfPayments)) / 
+                          (Math.pow(1 + monthlyRate, numberOfPayments) - 1);
+    
+    const totalInterest = (monthlyPayment * numberOfPayments) - amount;
+    const apr = rate; // Simplified APR calculation
+    
+    // Calculate DTI
+    const dti = monthlyIncome > 0 ? (monthlyPayment / monthlyIncome) * 100 : 0;
+    const autoReject = dti > 60;
+    
+    return {
+      monthlyPayment,
+      totalInterest,
+      apr,
+      dti,
+      autoReject
+    };
+  };
 
-  // Render borrower snapshot
-  const renderBorrowerSnapshot = () => (
-    <Card className="mb-6">
-      <CardHeader className="pb-3">
-        <div className="flex justify-between items-center">
-          <CardTitle>Borrower Snapshot</CardTitle>
-          <Button variant="outline" onClick={closeBorrowerView}>
-            Back to Dashboard
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        {loadingCreditData ? (
-          <div className="flex justify-center items-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin" />
-          </div>
-        ) : userCreditData ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Left Column - User Info */}
-            <div className="md:col-span-1">
-              <div className="flex items-center gap-4 mb-6">
-                <div className="bg-gray-100 p-3 rounded-full">
-                  <User className="h-8 w-8 text-gray-600" />
-                </div>
-                <div>
-                  <h3 className="text-xl font-bold">{selectedUser?.name || 'N/A'}</h3>
-                  <p className="text-muted-foreground">{selectedUser?.email || 'N/A'}</p>
-                </div>
-              </div>
-              
-              <div className="space-y-4">
-                <div>
-                  <h4 className="text-sm text-muted-foreground">Credit Score</h4>
-                  <div className="flex items-baseline gap-2 mt-1">
-                    <span className="text-3xl font-extrabold text-blue-700">{userCreditData.creditScore?.fico?.score ?? userCreditData.currentScore ?? 'N/A'}</span>
-                    <Badge variant="outline">
-                      {(() => {
-                        const score = userCreditData.creditScore?.fico?.score ?? userCreditData.currentScore;
-                        if (score >= 740) return 'Excellent';
-                        if (score >= 670) return 'Good';
-                        if (score >= 580) return 'Fair';
-                        if (typeof score === 'number') return 'Poor';
-                        return 'N/A';
-                      })()}
-                    </Badge>
+  // Update loan simulation when values change
+  const updateLoanSimulation = (field, value) => {
+    const newSimulation = { ...loanSimulation, [field]: value };
+    const monthlyIncome = userCreditData?.monthlyIncome || 0;
+    const metrics = calculateLoanMetrics(newSimulation.amount, newSimulation.term, newSimulation.rate, monthlyIncome);
+    
+    setLoanSimulation({
+      ...newSimulation,
+      ...metrics
+    });
+  };
+
+  // Initialize loan simulation when user data is loaded
+  useEffect(() => {
+    if (userCreditData) {
+      const monthlyIncome = userCreditData.monthlyIncome || 0;
+      const metrics = calculateLoanMetrics(loanSimulation.amount, loanSimulation.term, loanSimulation.rate, monthlyIncome);
+      setLoanSimulation(prev => ({
+        ...prev,
+        ...metrics
+      }));
+    }
+  }, [userCreditData]);
+
+  // Log DTI override when auto-reject is triggered
+  const logDTIOverride = async () => {
+    if (loanSimulation.autoReject && userCreditData?.userId) {
+      try {
+        await api.post(`/lenders/save-decision/${userCreditData.userId}`, {
+          decision: 'Review',
+          notes: `DTI Override: ${loanSimulation.dti.toFixed(1)}% DTI exceeds 60% threshold. Manual override required.`,
+          isManual: true,
+          reasons: ['DTI ratio exceeds standard threshold'],
+          recommendations: ['Requires senior underwriter approval'],
+          loanDetails: {
+            amount: loanSimulation.amount,
+            term: loanSimulation.term,
+            interestRate: loanSimulation.rate
+          },
+          flagForReview: true,
+          reviewNote: `High DTI ratio (${loanSimulation.dti.toFixed(1)}%) requires manual review and override.`
+        });
+        
+        toast({
+          title: "DTI Override Logged",
+          description: "High DTI ratio has been logged for manual review.",
+          variant: "default",
+        });
+      } catch (error) {
+        toast({
+          title: "Error",
+          description: "Failed to log DTI override.",
+          variant: "destructive",
+        });
+      }
+    }
+  };
+
+  // Derived values for metrics
+  const totalLoans = dashboardMetrics.approvedLoans + dashboardMetrics.pendingLoans + dashboardMetrics.rejectedLoans;
+  const approvalRate = totalLoans > 0 ? ((dashboardMetrics.approvedLoans / totalLoans) * 100).toFixed(1) : 0;
+
+  // Render dashboard metrics
+  const renderMetrics = () => {
+    const totalLoans = dashboardMetrics.approvedLoans + dashboardMetrics.pendingLoans + dashboardMetrics.rejectedLoans;
+    const approvalRate = totalLoans > 0 ? ((dashboardMetrics.approvedLoans / totalLoans) * 100).toFixed(1) : 0;
+    
+    return (
+      <div className="space-y-6 mb-8">
+        {/* Main Metrics Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {[
+            { 
+              title: 'Approved Loans', 
+              value: dashboardMetrics.approvedLoans, 
+              icon: CheckCircle2, 
+              color: 'emerald',
+              bgColor: 'bg-emerald-50 dark:bg-emerald-950/30',
+              iconColor: 'text-emerald-600 dark:text-emerald-400',
+              borderColor: 'border-emerald-200 dark:border-emerald-800',
+              trend: '+12%',
+              trendColor: 'text-emerald-600'
+            },
+            { 
+              title: 'Pending Loans', 
+              value: dashboardMetrics.pendingLoans, 
+              icon: Clock, 
+              color: 'amber',
+              bgColor: 'bg-amber-50 dark:bg-amber-950/30',
+              iconColor: 'text-amber-600 dark:text-amber-400',
+              borderColor: 'border-amber-200 dark:border-amber-800',
+              trend: '-5%',
+              trendColor: 'text-amber-600'
+            },
+            { 
+              title: 'Rejected Loans', 
+              value: dashboardMetrics.rejectedLoans, 
+              icon: XCircle, 
+              color: 'red',
+              bgColor: 'bg-red-50 dark:bg-red-950/30',
+              iconColor: 'text-red-600 dark:text-red-400',
+              borderColor: 'border-red-200 dark:border-red-800',
+              trend: '-8%',
+              trendColor: 'text-red-600'
+            },
+            { 
+              title: 'Avg. Decision Time', 
+              value: dashboardMetrics.avgDecisionTime, 
+              icon: BarChart4, 
+              color: 'blue',
+              bgColor: 'bg-blue-50 dark:bg-blue-950/30',
+              iconColor: 'text-blue-600 dark:text-blue-400',
+              borderColor: 'border-blue-200 dark:border-blue-800',
+              trend: '-15%',
+              trendColor: 'text-blue-600'
+            }
+          ].map((metric, index) => (
+            <Card 
+              key={index} 
+              className={`group hover:shadow-lg transition-all duration-300 ease-in-out border ${metric.borderColor} dark:bg-[#18191a] hover:scale-105`}
+            >
+              <CardContent className="p-6">
+                <div className="flex items-start justify-between mb-4">
+                  <div className={`p-3 rounded-xl ${metric.bgColor} border ${metric.borderColor}`}>
+                    <metric.icon className={`h-6 w-6 ${metric.iconColor}`} />
+                  </div>
+                  <div className="text-right">
+                    <span className={`text-xs font-medium ${metric.trendColor}`}>
+                      {metric.trend}
+                    </span>
                   </div>
                 </div>
                 
-                <div>
-                  <h4 className="text-sm text-muted-foreground">Risk Assessment</h4>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {userCreditData.lendingDecision?.riskFlags?.highDTI && (
-                      <Badge variant="destructive">High DTI</Badge>
-                    )}
-                    {userCreditData.lendingDecision?.riskFlags?.hasDefaults && (
-                      <Badge variant="destructive">Defaults</Badge>
-                    )}
-                    {userCreditData.lendingDecision?.riskFlags?.hasMissedPayments && (
-                      <Badge variant="warning">Missed Payments</Badge>
-                    )}
-                    {!userCreditData.lendingDecision?.riskFlags?.highDTI && 
-                     !userCreditData.lendingDecision?.riskFlags?.hasDefaults && 
-                     !userCreditData.lendingDecision?.riskFlags?.hasMissedPayments && (
-                      <Badge variant="default">Low Risk</Badge>
-                    )}
-                  </div>
+                <div className="space-y-2">
+                  <h3 className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {metric.value}
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 font-medium">
+                    {metric.title}
+                  </p>
                 </div>
                 
-                <div>
-                  <h4 className="text-sm text-muted-foreground">Lending Decision</h4>
-                  <div className="mt-1">
-                    {renderDecisionBadge(userCreditData.lendingDecision?.decision || 'Review', 'large')}
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            {/* Right Column - Financial Metrics */}
-            <div className="md:col-span-2">
-              <div className="grid grid-cols-2 gap-4">
-                {[
-                  { 
-                    title: 'Monthly Income', 
-                    value: userCreditData.monthlyIncome !== undefined && userCreditData.monthlyIncome !== null ? `$${userCreditData.monthlyIncome.toLocaleString()}` : 'N/A',
-                    editable: true
-                  },
-                  { 
-                    title: 'Total Debt', 
-                    value: userCreditData.totalDebt !== undefined && userCreditData.totalDebt !== null ? `$${userCreditData.totalDebt.toLocaleString()}` : 'N/A'
-                  },
-                  { 
-                    title: 'DTI Ratio', 
-                    value: userCreditData.lendingDecision?.debtToIncomeRatio !== undefined && userCreditData.lendingDecision?.debtToIncomeRatio !== null
-                      ? `${(userCreditData.lendingDecision.debtToIncomeRatio * 100).toFixed(1)}%` 
-                      : 'N/A' 
-                  },
-                  { 
-                    title: 'Max Loan Amount', 
-                    value: userCreditData.lendingDecision?.maxLoanAmount !== undefined && userCreditData.lendingDecision?.maxLoanAmount !== null
-                      ? `$${userCreditData.lendingDecision.maxLoanAmount.toLocaleString()}` : 'N/A',
-                    highlight: true
-                  },
-                  { 
-                    title: 'Suggested Rate', 
-                    value: userCreditData.lendingDecision?.suggestedInterestRate !== undefined && userCreditData.lendingDecision?.suggestedInterestRate !== null
-                      ? userCreditData.lendingDecision.suggestedInterestRate : 'N/A',
-                    highlight: true
-                  },
-                  { 
-                    title: 'Missed Payments', 
-                    value: userCreditData.recentMissedPayments !== undefined && userCreditData.recentMissedPayments !== null ? userCreditData.recentMissedPayments : 0 
-                  },
-                  { 
-                    title: 'Recent Defaults', 
-                    value: userCreditData.recentDefaults !== undefined && userCreditData.recentDefaults !== null ? userCreditData.recentDefaults : 0 
-                  },
-                  { 
-                    title: 'Credit Utilization', 
-                    value: userCreditData.creditUtilization?.overall !== undefined && userCreditData.creditUtilization?.overall !== null
-                      ? `${(userCreditData.creditUtilization.overall * 100).toFixed(1)}%` 
-                      : 'N/A' 
-                  },
-                  { 
-                    title: 'Credit Mix',
-                    value: userCreditData.creditMix !== undefined && userCreditData.creditMix !== null
-                      ? `${(userCreditData.creditMix * 100).toFixed(1)}%`
-                      : 'N/A'
-                  },
-                  {
-                    title: 'Credit Age (months)',
-                    value: userCreditData.creditAgeMonths !== undefined && userCreditData.creditAgeMonths !== null
-                      ? userCreditData.creditAgeMonths
-                      : 'N/A'
-                  },
-                  {
-                    title: 'Total Accounts',
-                    value: userCreditData.totalAccounts !== undefined && userCreditData.totalAccounts !== null
-                      ? userCreditData.totalAccounts
-                      : 'N/A'
-                  },
-                  {
-                    title: 'Open Accounts',
-                    value: userCreditData.openAccounts !== undefined && userCreditData.openAccounts !== null
-                      ? userCreditData.openAccounts
-                      : 'N/A'
-                  }
-                ].map((metric, index) => (
-                  <div 
-                    key={index} 
-                    className={`p-4 rounded-lg ${metric.highlight ? 'bg-blue-50' : 'bg-gray-50'}`}
-                  >
-                    <h4 className="text-sm text-muted-foreground">{metric.title}</h4>
-                    <div className="flex justify-between items-center mt-1">
-                      <p className={`text-lg font-semibold ${metric.highlight ? 'text-blue-600' : ''}`}>
-                        {metric.value}
-                      </p>
-                      {metric.editable && (
-                        <Button 
-                          variant="ghost" 
-                          size="icon"
-                          onClick={startEditingIncome}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                      )}
+                {/* Progress indicator for loans */}
+                {metric.title.includes('Loans') && totalLoans > 0 && (
+                  <div className="mt-4">
+                    <div className="flex justify-between text-xs text-gray-500 mb-1">
+                      <span>Portfolio Share</span>
+                      <span>{((metric.value / totalLoans) * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                      <div 
+                        className={`h-2 rounded-full transition-all duration-500 ${
+                          metric.color === 'emerald' ? 'bg-emerald-500' :
+                          metric.color === 'amber' ? 'bg-amber-500' :
+                          metric.color === 'red' ? 'bg-red-500' : 'bg-blue-500'
+                        }`}
+                        style={{ width: `${((metric.value / totalLoans) * 100)}%` }}
+                      />
                     </div>
                   </div>
-                ))}
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Summary Stats Row */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Card className="bg-gradient-to-r from-emerald-50 to-green-50 dark:from-emerald-950/30 dark:to-green-950/30 border-emerald-200 dark:border-emerald-800">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-emerald-700 dark:text-emerald-300">Approval Rate</h4>
+                  <p className="text-3xl font-bold text-emerald-800 dark:text-emerald-200">
+                    {approvalRate}%
+                  </p>
+                </div>
+                <div className="p-3 bg-emerald-100 dark:bg-emerald-900/50 rounded-full">
+                  <TrendingUp className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+                </div>
               </div>
-            </div>
-          </div>
-        ) : (
-          <div className="text-center py-8 text-muted-foreground">
-            No credit data available
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 border-blue-200 dark:border-blue-800">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-blue-700 dark:text-blue-300">Total Applications</h4>
+                  <p className="text-3xl font-bold text-blue-800 dark:text-blue-200">
+                    {totalLoans}
+                  </p>
+                </div>
+                <div className="p-3 bg-blue-100 dark:bg-blue-900/50 rounded-full">
+                  <FileText className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-gradient-to-r from-purple-50 to-pink-50 dark:from-purple-950/30 dark:to-pink-950/30 border-purple-200 dark:border-purple-800">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-medium text-purple-700 dark:text-purple-300">Efficiency Score</h4>
+                  <p className="text-3xl font-bold text-purple-800 dark:text-purple-200">
+                    {totalLoans > 0 ? Math.round((dashboardMetrics.approvedLoans / totalLoans) * 100) : 0}
+                  </p>
+                </div>
+                <div className="p-3 bg-purple-100 dark:bg-purple-900/50 rounded-full">
+                  <BarChart4 className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  };
 
   // Render borrower list
   const renderBorrowerList = () => (
@@ -774,7 +1016,7 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
             </TableCell>
             <TableCell>
               <div className="flex items-center">
-                {renderDecisionBadge(user.lendingDecision?.decision || 'Review')}
+                <DecisionBadge decision={user.lendingDecision?.decision || 'Review'} />
               </div>
             </TableCell>
             <TableCell>
@@ -796,24 +1038,58 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
   };
 
   return (
-    <div className="container mx-auto px-4 py-8 bg-gradient-to-br from-gray-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-950 dark:to-blue-950 min-h-screen rounded-xl shadow-lg transition-colors duration-300">
+    <div className="container mx-auto px-4 py-8 dark:bg-[#18191a] min-h-screen rounded-xl shadow-lg transition-colors duration-300">
       <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Lender Dashboard</h1>
           <p className="text-muted-foreground dark:text-gray-400">Monitor applications and make lending decisions</p>
         </div>
-        {/* Dark mode toggle button */}
-        <button
-          onClick={toggleDarkMode}
-          className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200 self-end"
-          aria-label="Toggle dark mode"
-        >
-          {darkMode ? (
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
-          ) : (
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-800" fill="currentColor" viewBox="0 0 24 24"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
-          )}
-        </button>
+        <div className="header-actions">
+          {/* Action Buttons */}
+          <div className="btn-group">
+            <Button
+              onClick={manualRefresh}
+              variant="outline"
+              className="btn-secondary lender-action-btn flex items-center gap-2"
+              disabled={pollingState.consecutiveErrors >= 10}
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+              {pollingState.consecutiveErrors > 0 && (
+                <Badge variant="destructive" className="ml-1 text-xs">
+                  {pollingState.consecutiveErrors}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              onClick={handleBatchUploadOpen}
+              variant="outline"
+              className="btn-secondary lender-action-btn flex items-center gap-2"
+            >
+              <Upload className="h-4 w-4" />
+              Batch Upload
+            </Button>
+            <Button
+              onClick={() => setShowRegister(true)}
+              className="btn-primary lender-action-btn flex items-center gap-2"
+            >
+              <UserPlus className="h-4 w-4" />
+              Register User
+            </Button>
+          </div>
+          {/* Dark mode toggle button */}
+          <button
+            onClick={toggleDarkMode}
+            className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200"
+            aria-label="Toggle dark mode"
+          >
+            {darkMode ? (
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-800" fill="currentColor" viewBox="0 0 24 24"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Search Panel */}
@@ -851,7 +1127,11 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
         <CardContent className="p-0">
           {users.length > 0 ? (
             <div className="overflow-x-auto">
-              {renderBorrowerList()}
+              <BorrowerList
+                users={users}
+                handleUserSelect={handleUserSelect}
+                renderDecisionBadge={DecisionBadge}
+              />
             </div>
           ) : (
             <div className="p-8 text-center text-muted-foreground">
@@ -867,7 +1147,7 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
 
       {/* Tabs Navigation */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-6">
-        <TabsList className="grid grid-cols-3">
+        <TabsList className="grid grid-cols-4">
           <TabsTrigger value="overview">
             <BarChart4 className="h-4 w-4 mr-2" />
             Overview
@@ -875,6 +1155,10 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
           <TabsTrigger value="borrower" disabled={!selectedUser}>
             <User className="h-4 w-4 mr-2" />
             Borrower
+          </TabsTrigger>
+          <TabsTrigger value="decision" disabled={!selectedUser}>
+            <FileText className="h-4 w-4 mr-2" />
+            Loan Decision
           </TabsTrigger>
           <TabsTrigger value="activity">
             <TrendingUp className="h-4 w-4 mr-2" />
@@ -887,7 +1171,11 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            {renderMetrics()}
+            <MetricsPanel
+              dashboardMetrics={dashboardMetrics}
+              totalLoans={totalLoans}
+              approvalRate={approvalRate}
+            />
             
             {/* Risk Breakdown */}
             <Card>
@@ -923,64 +1211,10 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
           
           <div className="space-y-6">
             {/* Alerts */}
-            <Card>
-              <CardHeader>
-                <div className="flex justify-between items-center">
-                  <CardTitle>Alerts & Monitoring</CardTitle>
-                  <Button variant="ghost" size="icon">
-                    <Bell className="h-5 w-5" />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {alerts.length > 0 ? alerts.map((alert, index) => (
-                    <div key={index} className="flex items-start gap-3">
-                      <div className={`p-2 rounded-full mt-1 ${alert.type === 'critical' ? 'bg-red-100' : 'bg-yellow-100'}`}>
-                        <AlertTriangle className={`h-4 w-4 ${alert.type === 'critical' ? 'text-red-600' : 'text-yellow-600'}`} />
-                      </div>
-                      <div>
-                        <h4 className="font-medium">{alert.title}</h4>
-                        <p className="text-sm text-muted-foreground">{alert.description}</p>
-                        <p className="text-xs text-muted-foreground mt-1">{alert.time}</p>
-                      </div>
-                    </div>
-                  )) : (
-                    <div className="text-center py-4 text-muted-foreground">
-                      No alerts at this time
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+            <AlertsPanel alerts={alerts} />
             
             {/* Recent Decisions */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Decisions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  {recentDecisions.length > 0 ? recentDecisions.map((decision, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 border rounded-lg">
-                      <div>
-                        <h4 className="font-medium">{decision.user?.name || 'Unknown User'}</h4>
-                        <p className="text-sm text-muted-foreground">
-                          {decision.user?.email || 'No email'}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {renderDecisionBadge(decision.lendingDecision?.decision || 'Review')}
-                      </div>
-                    </div>
-                  )) : (
-                    <div className="text-center py-4 text-muted-foreground">
-                      No recent decisions
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+            <RecentDecisionsPanel recentDecisions={recentDecisions} />
           </div>
         </div>
       )}
@@ -988,240 +1222,165 @@ const LenderDashboard = ({ darkMode, toggleDarkMode }) => {
       {activeTab === 'borrower' && selectedUser && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            {renderBorrowerSnapshot()}
+            <BorrowerSnapshot
+              userCreditData={userCreditData}
+              selectedUser={selectedUser}
+              closeBorrowerView={closeBorrowerView}
+              loadingCreditData={loadingCreditData}
+              startEditingIncome={startEditingIncome}
+              renderDecisionBadge={DecisionBadge}
+            />
             
-            {/* Credit Insights */}
-            {userCreditData && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Credit Insights</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <CreditInsights 
-                    creditData={userCreditData}
-                  />
-                </CardContent>
-              </Card>
-            )}
-            
-            {/* Improvement Tips */}
-            {userCreditData && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Improvement Recommendations</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ImprovementTipsEngine 
-                    creditData={userCreditData}
-                  />
-                </CardContent>
-              </Card>
-            )}
+
           </div>
           
           <div className="space-y-6">
-            {/* Lending Decision */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Lending Decision</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-6">
-                  <div className="flex items-center gap-3 mb-2">
-                    {userCreditData?.lendingDecision?.decision === 'Approve' && (
-                      <span className="text-2xl">✅</span>
-                    )}
-                    {userCreditData?.lendingDecision?.decision === 'Review' && (
-                      <span className="text-2xl">🟠</span>
-                    )}
-                    {userCreditData?.lendingDecision?.decision === 'Reject' && (
-                      <span className="text-2xl">❌</span>
-                    )}
-                    <span className="text-xl font-bold">
-                      {userCreditData?.lendingDecision?.decision === 'Approve' ? 'Loan Approval Summary' :
-                       userCreditData?.lendingDecision?.decision === 'Review' ? 'Loan Under Review' :
-                       userCreditData?.lendingDecision?.decision === 'Reject' ? 'Loan Rejected' :
-                       'No Lending Decision'}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div><span className="text-muted-foreground">Decision</span><br/>{userCreditData?.lendingDecision?.decision ?? 'N/A'}</div>
-                    <div><span className="text-muted-foreground">Score</span><br/>{userCreditData?.lendingDecision?.score ?? 'N/A'}</div>
-                    <div><span className="text-muted-foreground">Classification</span><br/>{userCreditData?.lendingDecision?.classification ?? 'N/A'}</div>
-                    <div><span className="text-muted-foreground">Risk Tier</span><br/>{userCreditData?.lendingDecision?.riskTier ?? 'N/A'}{userCreditData?.lendingDecision?.riskTierLabel ? ` (${userCreditData.lendingDecision.riskTierLabel})` : ''}</div>
-                    <div><span className="text-muted-foreground">Default Risk Estimate</span><br/>{userCreditData?.lendingDecision?.defaultRiskEstimate ?? 'N/A'}</div>
-                    <div><span className="text-muted-foreground">Engine Version</span><br/>{userCreditData?.lendingDecision?.engineVersion ?? 'N/A'}</div>
-                    <div><span className="text-muted-foreground">DTI</span><br/>{userCreditData?.lendingDecision?.dti ?? 'N/A'}</div>
-                    <div><span className="text-muted-foreground">Timestamp</span><br/>{userCreditData?.lendingDecision?.timestamp ? new Date(userCreditData.lendingDecision.timestamp).toLocaleString() : 'N/A'}</div>
-                    <div><span className="text-muted-foreground">Rejection Code</span><br/>{userCreditData?.lendingDecision?.rejectionCode ?? 'N/A'}</div>
-                  </div>
-                  {/* Scoring Details */}
-                  <div>
-                    <h4 className="font-medium mb-1">Scoring Details</h4>
-                    <div className="text-sm text-muted-foreground">
-                      <b>Recession Mode:</b> {userCreditData?.lendingDecision?.scoringDetails?.recessionMode ? 'Yes' : 'No'}<br/>
-                      <b>AI Enabled:</b> {userCreditData?.lendingDecision?.scoringDetails?.aiEnabled ? 'Yes' : 'No'}
-                    </div>
-                  </div>
-                  {/* Customer Profile */}
-                  <div>
-                    <h4 className="font-medium mb-1">Customer Profile</h4>
-                    <div className="text-sm text-muted-foreground">
-                      <b>Employment Status:</b> {userCreditData?.lendingDecision?.customerProfile?.employmentStatus ?? 'N/A'}<br/>
-                      <b>Active Loans:</b> {userCreditData?.lendingDecision?.customerProfile?.activeLoans ?? 'N/A'}<br/>
-                      <b>Last Delinquency:</b> {userCreditData?.lendingDecision?.customerProfile?.lastDelinquency ?? 'N/A'}
-                    </div>
-                  </div>
-                  {/* Reasons */}
-                  <div>
-                    <h4 className="font-medium mb-1">Reasons</h4>
-                    {userCreditData?.lendingDecision?.reasons && userCreditData.lendingDecision.reasons.length > 0 ? (
-                      <ul className="list-disc list-inside text-sm text-muted-foreground">
-                        {userCreditData.lendingDecision.reasons.map((reason, idx) => (
-                          <li key={idx}>{reason}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div className="text-muted-foreground">N/A</div>
-                    )}
-                  </div>
-                  {/* Risk Flags */}
-                  <div>
-                    <h4 className="font-medium mb-1 flex items-center gap-2">
-                      <AlertTriangle className="h-4 w-4 text-yellow-600" /> Risk Flags
-                    </h4>
-                    {userCreditData?.lendingDecision?.riskFlags && userCreditData.lendingDecision.riskFlags.length > 0 ? (
-                      <ul className="list-disc list-inside text-sm text-muted-foreground">
-                        {userCreditData.lendingDecision.riskFlags.map((flag, idx) => (
-                          <li key={idx}>{flag}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <div className="text-muted-foreground">N/A</div>
-                    )}
-                  </div>
-                  {/* Loan Offer */}
-                  <div>
-                    <h4 className="font-medium mb-1">Loan Offer</h4>
-                    {userCreditData?.lendingDecision?.offer ? (
-                      <div style={{ lineHeight: 2 }}>
-                        <b>Max Loan Amount:</b> {userCreditData.lendingDecision.offer.maxAmount ?? 'N/A'}<br/>
-                        <b>Available Terms:</b> {userCreditData.lendingDecision.offer.availableTerms?.join(', ') ?? 'N/A'}<br/>
-                        <b>Interest Rate:</b> {userCreditData.lendingDecision.offer.interestRate ?? 'N/A'}%<br/>
-                        <b>Sample Payment (for {userCreditData.lendingDecision.offer.sampleTerm} mo):</b> {userCreditData.lendingDecision.offer.samplePayment ?? 'N/A'}<br/>
-                        <b>Collateral Required:</b> {userCreditData.lendingDecision.offer.collateralRequired ? 'Yes' : 'No'}<br/>
-                        {/* Pricing Model */}
-                        <b>Pricing Model:</b><br/>
-                        &nbsp;&nbsp;Base Rate: {userCreditData.lendingDecision.offer.pricingModel?.baseRate ?? 'N/A'}%<br/>
-                        &nbsp;&nbsp;DTI Adj.: {userCreditData.lendingDecision.offer.pricingModel?.adjustments?.dtiAdjustment ?? 'N/A'}%<br/>
-                        &nbsp;&nbsp;Recession Adj.: {userCreditData.lendingDecision.offer.pricingModel?.adjustments?.recessionAdjustment ?? 'N/A'}%<br/>
-                        &nbsp;&nbsp;Payment Adj.: {userCreditData.lendingDecision.offer.pricingModel?.adjustments?.paymentAdjustment ?? 'N/A'}%<br/>
-                        &nbsp;&nbsp;Final Rate: {userCreditData.lendingDecision.offer.pricingModel?.finalRate ?? 'N/A'}%
-                      </div>
-                    ) : (
-                      <div className="text-muted-foreground">No loan offer available for this user.</div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            {/* Loan Decision Status Component */}
+            <LoanDecisionStatus
+              decision={userCreditData?.lendingDecision}
+              loanOffer={userCreditData?.lendingDecision?.offer || loanOffer}
+              onDecisionAction={handleDecisionAction}
+              isLender={true}
+            />
             
-            {/* Loan Offer */}
+            {/* Complete Lending Decision Details */}
             {userCreditData?.lendingDecision && (
-              <Card style={{ marginBottom: 24 }}>
+              <LendingDecisionDetails lendingDecision={userCreditData.lendingDecision} />
+            )}
+            
+            {/* Debug info */}
+            {!userCreditData && (
+              <div className="text-xs text-gray-500 p-2 bg-gray-100 rounded">
+                Debug: userCreditData is null, selectedUser: {selectedUser?.name || 'none'}
+              </div>
+            )}
+            
+            {/* Decision Outcome Controls */}
+            {userCreditData && (
+              <Card>
                 <CardHeader>
-                  <CardTitle>Loan Offer</CardTitle>
+                  <div className="flex justify-between items-center">
+                    <CardTitle>Decision Outcome Controls</CardTitle>
+                    <div className="text-xs text-gray-500">Debug: userCreditData exists, isEditingDecision: {isEditingDecision.toString()}</div>
+                    {!isEditingDecision ? (
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => {
+                          console.log('Edit Decision button clicked');
+                          startEditingDecision();
+                        }}
+                        className="flex items-center gap-2"
+                      >
+                        <Edit className="h-4 w-4" />
+                        Edit Decision
+                      </Button>
+                    ) : null}
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  {userCreditData.lendingDecision.recommendation || userCreditData.lendingDecision.maxLoanAmount ? (
-                    <div style={{ lineHeight: 2 }}>
-                      <b>Max Loan Amount:</b> {userCreditData.lendingDecision.recommendation?.maxLoanAmount ?? userCreditData.lendingDecision.maxLoanAmount ?? 'N/A'}<br/>
-                      <b>Interest Rate:</b> {userCreditData.lendingDecision.recommendation?.interestRate ?? userCreditData.lendingDecision.interestRate ?? 'N/A'}<br/>
-                      <b>Term (months):</b> {userCreditData.lendingDecision.recommendation?.termMonths ?? userCreditData.lendingDecision.termMonths ?? 'N/A'}<br/>
-                      <b>Monthly Payment:</b> {userCreditData.lendingDecision.recommendation?.monthlyPayment ?? userCreditData.lendingDecision.monthlyPayment ?? 'N/A'}<br/>
+                  {!isEditingDecision ? (
+                    // Display current decision
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3">
+                        <span className="font-medium">Current Decision:</span>
+                        <DecisionBadge decision={userCreditData?.lendingDecision?.decision || 'Review'} />
+                      </div>
+                      {userCreditData?.lendingDecision?.manualNotes && (
+                        <div>
+                          <span className="font-medium">Notes:</span>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            {userCreditData.lendingDecision.manualNotes}
+                          </p>
+                        </div>
+                      )}
+                      {userCreditData?.lendingDecision?.flagForReview && (
+                        <div className="flex items-center gap-2 text-yellow-600">
+                          <Flag className="h-4 w-4" />
+                          <span className="text-sm font-medium">Flagged for Manual Review</span>
+                        </div>
+                      )}
                     </div>
                   ) : (
-                    <div className="text-muted-foreground">No loan offer available for this user.</div>
+                    <ManualDecisionForm
+                      manualDecision={manualDecision}
+                      handleManualDecision={handleManualDecision}
+                      setIsEditingDecision={setIsEditingDecision}
+                      saveManualDecision={saveManualDecision}
+                      recalcLoading={recalcLoading}
+                      hasCollateral={hasCollateral}
+                      setHasCollateral={setHasCollateral}
+                      collateralValue={collateralValue}
+                      setCollateralValue={setCollateralValue}
+                      recalculateWithCollateral={recalculateWithCollateral}
+                      maxLoanAmount={userCreditData?.lendingDecision?.maxOffer || loanOffer?.maxOffer || 0}
+                    />
                   )}
                 </CardContent>
               </Card>
             )}
+            
+            {/* Risk Tier Override */}
+            {userCreditData && (
+              <RiskTierOverridePanel
+                userCreditData={userCreditData}
+                isEditingDecision={isEditingDecision}
+                manualDecision={manualDecision}
+                handleManualDecision={handleManualDecision}
+                user={user}
+              />
+            )}
+            
+            {/* Loan Offer Simulation */}
+            {userCreditData && (
+              <LoanSimulationPanel
+                loanSimulation={loanSimulation}
+                setLoanSimulation={setLoanSimulation}
+                showLoanSimulation={showLoanSimulation}
+                setShowLoanSimulation={setShowLoanSimulation}
+                updateLoanSimulation={updateLoanSimulation}
+                handleManualDecision={handleManualDecision}
+                toast={toast}
+                userCreditData={userCreditData}
+                logDTIOverride={logDTIOverride}
+              />
+            )}
+            
           </div>
         </div>
       )}
 
-      {/* Phone Search */}
-      <form onSubmit={handlePhoneSearch} style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <Input
-          placeholder="Search by phone number..."
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          style={{ maxWidth: 240 }}
-        />
-        <Button type="submit" disabled={decisionLoading}>Search</Button>
-      </form>
-      {decisionLoading && <div>Loading decision...</div>}
-      {decisionError && <div style={{ color: 'red' }}>{decisionError}</div>}
-      {decisionData && (
-        <Card style={{ marginBottom: 24 }}>
-          <CardHeader>
-            <CardTitle>API Debug: Full Decision Data</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: 12 }}>{JSON.stringify(decisionData, null, 2)}</pre>
-            <div style={{ marginTop: 16 }}>
-              <b>User:</b> {decisionData.user}<br/>
-              <b>Score:</b> {decisionData.score}<br/>
-              <b>Decision:</b> {decisionData.decision}<br/>
-              {decisionData.loanOffer && (
-                <>
-                  <b>Loan Offer:</b><br/>
-                  &nbsp;&nbsp;Amount: {decisionData.loanOffer.amount}<br/>
-                  &nbsp;&nbsp;Rate: {decisionData.loanOffer.rate}<br/>
-                  &nbsp;&nbsp;Term: {decisionData.loanOffer.term}<br/>
-                  &nbsp;&nbsp;Monthly Payment: {decisionData.loanOffer.monthlyPayment}<br/>
-                </>
-              )}
-              <b>Risk Flags:</b> {decisionData.riskFlags?.length ? decisionData.riskFlags.join(', ') : 'None'}<br/>
-              <b>Insight:</b> {decisionData.insight}<br/>
-            </div>
-          </CardContent>
-        </Card>
+      {/* New Decision Tab */}
+      {activeTab === 'decision' && selectedUser && (
+        <div className="space-y-6">
+          <LoanDecisionStatus
+            decision={userCreditData?.lendingDecision}
+            loanOffer={userCreditData?.lendingDecision?.offer || loanOffer}
+            onDecisionAction={handleDecisionAction}
+            isLender={true}
+          />
+        </div>
       )}
 
-      <Button onClick={handleBatchUploadOpen} style={{ marginBottom: 16 }}>Batch Upload Borrowers</Button>
-      <Modal
-        open={showBatchUpload}
-        onCancel={handleBatchUploadClose}
-        footer={null}
-        title="Batch Upload Borrowers"
-        width={700}
-        destroyOnHidden
-      >
-        <AdminBatchUpload onClose={handleBatchUploadClose} onUploadComplete={handleBatchUploadComplete} />
-      </Modal>
+
+
+      {/* Batch Upload Modal */}
+      <BatchUploadDialog
+        showBatchUpload={showBatchUpload}
+        handleBatchUploadClose={handleBatchUploadClose}
+        handleBatchUploadComplete={handleBatchUploadComplete}
+        toast={toast}
+      />
       {batchResults && (
-        <Card style={{ marginBottom: 24 }}>
-          <CardHeader>
-            <CardTitle>Batch Upload Results</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(batchResults, null, 2)}</pre>
-          </CardContent>
-        </Card>
+        <BatchUploadResults batchResults={batchResults} />
       )}
 
-      <Button onClick={() => setShowRegister(true)} style={{ marginBottom: 16 }}>Register New User</Button>
-      <Modal
-        open={showRegister}
-        onCancel={() => setShowRegister(false)}
-        footer={null}
-        title="Register New User"
-        width={600}
-        destroyOnHidden
-      >
-        <EnhancedRegister onSuccess={() => setShowRegister(false)} onClose={() => setShowRegister(false)} isAdmin={true} />
-      </Modal>
+      {/* Register User Modal */}
+      <RegisterUserDialog
+        showRegister={showRegister}
+        setShowRegister={setShowRegister}
+        toast={toast}
+      />
     </div>
   );
 };

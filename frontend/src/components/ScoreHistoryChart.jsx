@@ -1,18 +1,41 @@
 import React from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { FiFlag } from 'react-icons/fi';
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
+    const events = payload[0].payload.events || [];
     return (
       <div className="bg-white dark:bg-gray-800 p-3 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700">
         <p className="font-medium text-gray-900 dark:text-white">{label}</p>
         <p className="text-sm text-gray-600 dark:text-gray-300">
           Score: <span className="font-medium">{payload[0].value}</span>
         </p>
+        {events.length > 0 && (
+          <div className="mt-2">
+            <div className="flex items-center text-xs text-indigo-600 dark:text-indigo-300 font-semibold mb-1"><FiFlag className="mr-1" /> Significant Event{events.length > 1 ? 's' : ''}</div>
+            <ul className="list-disc ml-5 text-xs text-gray-700 dark:text-gray-200">
+              {events.map((event, idx) => <li key={idx}>{event}</li>)}
+            </ul>
+          </div>
+        )}
       </div>
     );
   }
   return null;
+};
+
+const EventDot = (props) => {
+  const { cx, cy, payload } = props;
+  if (payload.events && payload.events.length > 0) {
+    return (
+      <g>
+        <circle cx={cx} cy={cy} r={5} fill="#6366F1" stroke="#fff" strokeWidth={2} />
+        <FiFlag x={cx - 7} y={cy - 20} size={14} color="#6366F1" />
+      </g>
+    );
+  }
+  return <circle cx={cx} cy={cy} r={4} fill="#fff" stroke="#6366F1" strokeWidth={2} />;
 };
 
 const ScoreHistoryChart = ({ data }) => {
@@ -67,19 +90,8 @@ const ScoreHistoryChart = ({ data }) => {
               dataKey="score"
               stroke="#6366F1"
               strokeWidth={2}
-              dot={{
-                stroke: '#6366F1',
-                strokeWidth: 2,
-                fill: '#fff',
-                r: 4,
-                strokeDasharray: ''
-              }}
-              activeDot={{
-                r: 6,
-                stroke: '#fff',
-                strokeWidth: 2,
-                fill: '#6366F1'
-              }}
+              dot={<EventDot />}
+              activeDot={{ r: 6, stroke: '#fff', strokeWidth: 2, fill: '#6366F1' }}
             />
           </LineChart>
         </ResponsiveContainer>
@@ -105,4 +117,4 @@ const ScoreHistoryChart = ({ data }) => {
   );
 };
 
-export default ScoreHistoryChart;
+export default React.memo(ScoreHistoryChart);

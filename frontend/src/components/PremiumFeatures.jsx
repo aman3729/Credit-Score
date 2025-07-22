@@ -247,4 +247,4 @@ const PremiumFeatures = ({ user, onUpgrade }) => {
   );
 };
 
-export default PremiumFeatures; 
+export default React.memo(PremiumFeatures); 

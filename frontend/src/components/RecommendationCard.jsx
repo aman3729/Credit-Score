@@ -3,7 +3,7 @@ import { FiArrowRight, FiAlertCircle } from 'react-icons/fi';
 
 const RecommendationCard = ({ title, description, action }) => {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow duration-200">
+    <div className="bg-white dark:bg-black rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow duration-200">
       <div className="flex items-start">
         <div className="flex-shrink-0 h-10 w-10 rounded-full bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
           <FiAlertCircle className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />

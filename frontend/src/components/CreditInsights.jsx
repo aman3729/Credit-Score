@@ -244,4 +244,4 @@ const CreditInsights = ({ userData, scoreResult, lendingDecision }) => {
   );
 };
 
-export default CreditInsights; 
+export default React.memo(CreditInsights); 

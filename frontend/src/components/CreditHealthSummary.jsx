@@ -46,16 +46,16 @@ const CreditHealthSummary = ({ score = 755, factors = {} }) => {
   const positivePercentage = Math.round((positiveFactors / totalFactors) * 100);
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-6 transition-colors duration-200">
+    <div className="bg-white dark:bg-black rounded-xl shadow-sm p-6 transition-colors duration-200">
       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Credit Health Summary</h2>
       
-      <div className={`${health.bgColor} rounded-lg p-4 mb-6`}>
+      <div className={`${health.bgColor} dark:bg-black rounded-lg p-4 mb-6`}>
         <div className="flex">
           <div className="flex-shrink-0">
             {health.icon}
           </div>
           <div className="ml-3">
-            <h3 className={`text-sm font-medium ${health.color}`}>
+            <h3 className={`text-sm font-medium ${health.color} dark:text-white`}>
               {health.status} Credit Health
             </h3>
             <div className="mt-1 text-sm text-gray-700 dark:text-gray-300">
@@ -68,7 +68,7 @@ const CreditHealthSummary = ({ score = 755, factors = {} }) => {
       <div className="space-y-4">
         <div>
           <div className="flex justify-between text-sm mb-1">
-            <span className="text-gray-600 dark:text-gray-400">Positive Factors</span>
+            <span className="text-gray-600 dark:text-gray-300">Positive Factors</span>
             <span className="font-medium text-gray-900 dark:text-white">{positivePercentage}%</span>
           </div>
           <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
