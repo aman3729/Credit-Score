@@ -27,10 +27,20 @@ if (!rootElement) {
   errorDiv.style.borderBottom = '1px solid #f5c6cb';
   errorDiv.style.zIndex = '1000';
   errorDiv.style.fontFamily = 'sans-serif';
-  errorDiv.innerHTML = `
-    <h2 style="margin: 0 0 10px 0; font-size: 18px; font-weight: bold;">Error: Root element not found</h2>
-    <p style="margin: 0;">Could not find an element with id="root". Please check your index.html file.</p>
-  `;
+  
+  // Create error content safely without innerHTML
+  const errorTitle = document.createElement('h2');
+  errorTitle.style.margin = '0 0 10px 0';
+  errorTitle.style.fontSize = '18px';
+  errorTitle.style.fontWeight = 'bold';
+  errorTitle.textContent = 'Error: Root element not found';
+  
+  const errorMessage = document.createElement('p');
+  errorMessage.style.margin = '0';
+  errorMessage.textContent = 'Could not find an element with id="root". Please check your index.html file.';
+  
+  errorDiv.appendChild(errorTitle);
+  errorDiv.appendChild(errorMessage);
   document.body.prepend(errorDiv);
   throw new Error('Could not find root element with id "root"');
 }
@@ -85,11 +95,27 @@ try {
   errorDiv.style.zIndex = '1000';
   errorDiv.style.fontFamily = 'sans-serif';
   errorDiv.style.whiteSpace = 'pre';
-  errorDiv.innerHTML = `
-    <h2 style="margin: 0 0 10px 0; font-size: 18px; font-weight: bold;">Test App Error</h2>
-    <p style="margin: 0 0 10px 0;">${error.message}</p>
-    <p style="margin: 0; font-size: 14px; color: #666;">Check the console for more details.</p>
-  `;
+  
+  // Create error content safely without innerHTML
+  const errorTitle = document.createElement('h2');
+  errorTitle.style.margin = '0 0 10px 0';
+  errorTitle.style.fontSize = '18px';
+  errorTitle.style.fontWeight = 'bold';
+  errorTitle.textContent = 'Test App Error';
+  
+  const errorMessage = document.createElement('p');
+  errorMessage.style.margin = '0 0 10px 0';
+  errorMessage.textContent = error.message;
+  
+  const errorDetails = document.createElement('p');
+  errorDetails.style.margin = '0';
+  errorDetails.style.fontSize = '14px';
+  errorDetails.style.color = '#666';
+  errorDetails.textContent = 'Check the console for more details.';
+  
+  errorDiv.appendChild(errorTitle);
+  errorDiv.appendChild(errorMessage);
+  errorDiv.appendChild(errorDetails);
   
   rootElement.appendChild(errorDiv);
   throw error;

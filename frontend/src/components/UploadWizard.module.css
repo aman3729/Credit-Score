@@ -1,0 +1,73 @@
+.wizard-step-content {
+  padding: 16px;
+}
+
+.step-header {
+  margin-bottom: 24px;
+}
+
+.summary-card, .mapping-card, .profile-card, .engine-card {
+  margin-bottom: 16px;
+}
+
+.card-title {
+  margin-bottom: 16px;
+}
+
+.grid-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.mapping-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  min-height: 100px;
+}
+
+.mapping-item {
+  padding: 8px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  background: #fafafa;
+  display: flex;
+  gap: 8px;
+}
+
+.profile-form {
+  display: flex;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.profile-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 6px;
+}
+
+.upload-wizard-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wizard-content-card {
+  flex: 1;
+  overflow: auto;
+  margin-top: 16px;
+}
+
+.wizard-content {
+  padding: 16px;
+  height: 100%;
+}
+
+.summary-item, .detail-item {
+  display: flex;
+  gap: 8px;
+} 

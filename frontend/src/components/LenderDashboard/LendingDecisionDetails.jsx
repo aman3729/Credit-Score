@@ -17,16 +17,129 @@ import {
 const LendingDecisionDetails = ({ lendingDecision }) => {
   if (!lendingDecision) return null;
 
+  // Detect new engine output structure
+  const isNewEngine = lendingDecision.engine === 'LendingDecisionEngine' && lendingDecision.version && lendingDecision.decision && Array.isArray(lendingDecision.loanOffers);
+
+  // Helper for formatting date
   const formatDate = (timestamp) => {
     if (!timestamp) return 'N/A';
-    return new Date(timestamp).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    return new Date(timestamp).toLocaleString();
   };
+
+  // Helper for rendering loan offers
+  const renderLoanOffers = (offers) => (
+    <div className="space-y-4">
+      {offers.map((offer, idx) => (
+        <Card key={offer.offerId || idx} className="bg-blue-50 dark:bg-blue-900/10">
+          <CardHeader>
+            <CardTitle>Loan Offer {offer.offerId ? `#${offer.offerId}` : `#${idx+1}`}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <div><b>Type:</b> {offer.offerType}</div>
+              <div><b>Amount:</b> {offer.amount} {offer.currency}</div>
+              <div><b>Term:</b> {offer.term} months</div>
+              <div><b>Interest Rate:</b> {offer.interestRate}%</div>
+              <div><b>APR:</b> {offer.apr}%</div>
+              <div><b>Monthly Payment:</b> {offer.monthlyPayment}</div>
+              <div><b>Security Type:</b> {offer.securityType}</div>
+              {/* Render fees, amortizationSchedule, disclosures if present */}
+              {offer.fees && <div className="col-span-2"><b>Fees:</b> {JSON.stringify(offer.fees)}</div>}
+              {offer.amortizationSchedule && <div className="col-span-2"><b>Amortization Schedule:</b> <pre className="whitespace-pre-wrap">{JSON.stringify(offer.amortizationSchedule, null, 2)}</pre></div>}
+              {offer.disclosures && <div className="col-span-2"><b>Disclosures:</b> <pre className="whitespace-pre-wrap">{JSON.stringify(offer.disclosures, null, 2)}</pre></div>}
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+
+  // Helper for collapsible details
+  const [showScoreDetails, setShowScoreDetails] = React.useState(false);
+  const [showPerfMetrics, setShowPerfMetrics] = React.useState(false);
+
+  if (isNewEngine) {
+    const { engine, version, timestamp, decision, loanOffers, scoreDetails, performanceMetrics } = lendingDecision;
+    return (
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileText className="h-5 w-5 text-blue-600" />
+              Lending Decision Engine Output
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <div className="space-y-2 text-sm">
+                <div><b>Engine:</b> {engine}</div>
+                <div><b>Version:</b> {version}</div>
+                <div><b>Timestamp:</b> {formatDate(timestamp)}</div>
+              </div>
+              <div className="space-y-2 text-sm col-span-3">
+                <h4 className="font-medium text-sm text-muted-foreground">Decision</h4>
+                <div><b>Status:</b> {decision.status}</div>
+                <div><b>Reason:</b> {decision.reason}</div>
+                <div><b>Approved Amount:</b> {decision.approvedAmount}</div>
+                <div><b>Risk Category:</b> {decision.riskCategory}</div>
+                <div><b>DTI Status:</b> {decision.dtiStatus}</div>
+                <div><b>Loan to Value:</b> {decision.loanToValue}</div>
+                <div><b>Debt Service Coverage Ratio:</b> {decision.debtServiceCoverageRatio}</div>
+                {decision.verificationFlags && decision.verificationFlags.length > 0 && (
+                  <div><b>Verification Flags:</b> {decision.verificationFlags.join(', ')}</div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        {/* Loan Offers */}
+        {loanOffers && loanOffers.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Loan Offers</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {renderLoanOffers(loanOffers)}
+            </CardContent>
+          </Card>
+        )}
+        {/* Score Details (collapsible) */}
+        {scoreDetails && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 cursor-pointer" onClick={() => setShowScoreDetails(v => !v)}>
+                <Calculator className="h-5 w-5 text-purple-600" />
+                <span>Score Details</span>
+                <span className="ml-2 text-xs text-blue-500">[{showScoreDetails ? 'Hide' : 'Show'}]</span>
+              </CardTitle>
+            </CardHeader>
+            {showScoreDetails && (
+              <CardContent>
+                <pre className="whitespace-pre-wrap text-xs bg-gray-50 p-2 rounded overflow-x-auto">{JSON.stringify(scoreDetails, null, 2)}</pre>
+              </CardContent>
+            )}
+          </Card>
+        )}
+        {/* Performance Metrics (collapsible) */}
+        {performanceMetrics && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 cursor-pointer" onClick={() => setShowPerfMetrics(v => !v)}>
+                <TrendingUp className="h-5 w-5 text-green-600" />
+                <span>Performance Metrics</span>
+                <span className="ml-2 text-xs text-blue-500">[{showPerfMetrics ? 'Hide' : 'Show'}]</span>
+              </CardTitle>
+            </CardHeader>
+            {showPerfMetrics && (
+              <CardContent>
+                <pre className="whitespace-pre-wrap text-xs bg-gray-50 p-2 rounded overflow-x-auto">{JSON.stringify(performanceMetrics, null, 2)}</pre>
+              </CardContent>
+            )}
+          </Card>
+        )}
+      </div>
+    );
+  }
 
   // Add a mapping for loanType values to labels
   const loanTypeLabels = {
@@ -78,7 +191,7 @@ const LendingDecisionDetails = ({ lendingDecision }) => {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* Decision Summary */}
             <div className="space-y-3">
               <h4 className="font-medium text-sm text-muted-foreground">Decision Summary</h4>
@@ -192,7 +305,7 @@ const LendingDecisionDetails = ({ lendingDecision }) => {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="space-y-3">
                 <h4 className="font-medium text-sm text-muted-foreground">Engine Settings</h4>
                 <div className="space-y-2 text-sm">

@@ -2,94 +2,113 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
-import { Sun, Moon, LogOut, User, Menu, X } from 'lucide-react';
-import NavLink from './ui/NavLink';
+import { Sun, Moon, LogOut, User, Menu, X, CreditCard, LayoutDashboard, ShieldCheck, BarChart4 } from 'lucide-react';
+
+const NavLink = ({ to, children, activePath }) => {
+  const location = useLocation();
+  const isActive = location.pathname === to || 
+                  (activePath && location.pathname.startsWith(activePath));
+  
+  return (
+    <Link
+      to={to}
+      className={`flex items-center px-3 py-2 rounded-lg transition-all duration-200 ${
+        isActive 
+          ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-md'
+          : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
+      }`}
+    >
+      {children}
+    </Link>
+  );
+};
 
 const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   
-  // Combine props with context for flexibility
   const currentUser = user || {};
   const isAuthenticated = !!user;
   
-  // Close mobile menu when location changes
   useEffect(() => {
     setMobileMenuOpen(false);
   }, [location]);
   
-  // Don't show navigation on auth pages
-  const hideNav = ['/login', '/register', '/verify-email'].includes(location.pathname);
-  if (hideNav) {
-    return null;
-  }
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 10);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
   
-  // Toggle dark mode
-  const handleDarkModeToggle = () => {
-    if (toggleDarkMode) {
-      toggleDarkMode();
-    }
-  };
+  const hideNav = ['/login', '/register', '/verify-email'].includes(location.pathname);
+  if (hideNav) return null;
+  
+  const handleDarkModeToggle = () => toggleDarkMode?.();
   
   const handleLogout = async () => {
     try {
-      if (onLogout) {
-        await onLogout();
-      } else {
-        await logout();
-      }
+      await (onLogout ? onLogout() : logout());
       navigate('/login', { replace: true });
     } catch (error) {
       console.error('Logout error:', error);
     }
   };
-  
-  // Toggle mobile menu
-  const toggleMobileMenu = () => {
-    setMobileMenuOpen(!mobileMenuOpen);
-  };
 
   return (
-    <nav className="bg-white dark:bg-[#18191a] shadow-md fixed w-full top-0 z-50">
+    <nav 
+      className={`fixed w-full top-0 z-50 transition-all duration-300 ${
+        scrolled 
+          ? 'bg-white/90 dark:bg-[#0f0f10]/90 backdrop-blur-md shadow-lg py-2' 
+          : 'bg-transparent py-3'
+      }`}
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16">
-          <div className="flex items-center">
-            <Link to="/" className="flex-shrink-0 flex items-center">
-              <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-blue-400 bg-clip-text text-transparent">
-                Credit Score
-              </span>
-            </Link>
-            
-            {/* Desktop Navigation */}
-            <div className="hidden md:ml-10 md:flex md:space-x-2">
-              <NavLink to="/dashboard" activePath="/dashboard">
-                Dashboard
-              </NavLink>
-              
-              {/* Premium Dashboard Link */}
-              {(currentUser?.premium?.isPremium || currentUser?.role === 'admin') && (
-                <NavLink to="/premium" activePath="/premium">
-                  Premium Dashboard
-                </NavLink>
-              )}
-              
-              {currentUser?.role === 'admin' && (
-                <NavLink to="/admin" activePath="/admin">
-                  Admin
-                </NavLink>
-              )}
-              
-              {(currentUser?.role === 'lender' || currentUser?.role === 'admin') && (
-                <NavLink 
-                  to="/lender"
-                  activePath="/lender"
-                >
-                  Lender
-                </NavLink>
-              )}
+        <div className="flex justify-between items-center">
+          {/* Logo */}
+          <Link 
+            to="/" 
+            className="flex items-center space-x-2 group"
+          >
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-2 rounded-lg group-hover:scale-105 transition-transform">
+              <CreditCard className="h-5 w-5 text-white" />
             </div>
+            <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+              MVOscore
+            </span>
+          </Link>
+          
+          {/* Desktop Navigation */}
+          <div className="hidden md:flex items-center space-x-1">
+            <NavLink to="/dashboard" activePath="/dashboard">
+              <LayoutDashboard className="h-4 w-4 mr-2" />
+              Dashboard
+            </NavLink>
+            
+            {(currentUser?.premium?.isPremium || currentUser?.role === 'admin') && (
+              <NavLink to="/premium" activePath="/premium">
+                <BarChart4 className="h-4 w-4 mr-2" />
+                Premium
+              </NavLink>
+            )}
+            
+            {currentUser?.role === 'admin' && (
+              <NavLink to="/admin" activePath="/admin">
+                <ShieldCheck className="h-4 w-4 mr-2" />
+                Admin
+              </NavLink>
+            )}
+            
+            {(currentUser?.role === 'lender' || currentUser?.role === 'admin') && (
+              <NavLink to="/lender" activePath="/lender">
+                <BarChart4 className="h-4 w-4 mr-2" />
+                Lender
+              </NavLink>
+            )}
           </div>
           
           {/* Right side controls */}
@@ -99,7 +118,7 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
               variant="ghost"
               size="icon"
               onClick={handleDarkModeToggle}
-              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
+              className="text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 rounded-full"
               aria-label="Toggle dark mode"
             >
               {darkMode ? (
@@ -111,7 +130,8 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
             
             {isAuthenticated ? (
               <div className="flex items-center space-x-2">
-                <div className="hidden md:flex items-center space-x-2">
+                {/* User profile */}
+                <div className="hidden md:flex items-center space-x-3">
                   <div className="flex flex-col items-end">
                     <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
                       {user?.firstName || user?.username || 'User'}
@@ -120,16 +140,19 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
                       {user?.role || 'user'}
                     </span>
                   </div>
-                  <div className="h-8 w-8 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
-                    <User className="h-4 w-4 text-gray-600 dark:text-gray-300" />
+                  <div className="h-9 w-9 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 flex items-center justify-center">
+                    <span className="text-white font-medium">
+                      {(user?.firstName?.[0] || user?.username?.[0] || 'U').toUpperCase()}
+                    </span>
                   </div>
                 </div>
                 
+                {/* Logout button */}
                 <Button
                   variant="ghost"
                   size="icon"
                   onClick={handleLogout}
-                  className="text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400"
+                  className="text-gray-500 hover:bg-red-50 hover:text-red-600 dark:text-gray-400 dark:hover:bg-red-900/30 dark:hover:text-red-400 rounded-full"
                   aria-label="Logout"
                 >
                   <LogOut className="h-5 w-5" />
@@ -140,7 +163,7 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
                   variant="ghost"
                   size="icon"
                   className="md:hidden"
-                  onClick={toggleMobileMenu}
+                  onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                   aria-label="Toggle menu"
                 >
                   {mobileMenuOpen ? (
@@ -155,11 +178,15 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
                 <Button
                   asChild
                   variant="ghost"
-                  className="text-gray-700 dark:text-gray-200"
+                  className="text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
                 >
                   <Link to="/login">Sign In</Link>
                 </Button>
-                <Button asChild variant="default">
+                <Button 
+                  asChild 
+                  variant="default"
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                >
                   <Link to="/register">Get Started</Link>
                 </Button>
               </div>
@@ -170,48 +197,81 @@ const Navigation = ({ darkMode, toggleDarkMode, onLogout }) => {
       
       {/* Mobile menu */}
       {mobileMenuOpen && (
-        <div className="md:hidden bg-white dark:bg-gray-800 shadow-lg">
-          <div className="px-2 pt-2 pb-3 space-y-1">
+        <div className={`md:hidden bg-white dark:bg-gray-900 shadow-xl rounded-lg mx-4 mt-2 overflow-hidden transition-all duration-300 ${
+          mobileMenuOpen ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+        }`}>
+          <div className="px-4 pt-3 pb-4 space-y-1">
+            <div className="flex justify-between items-center pb-2 mb-2 border-b border-gray-200 dark:border-gray-800">
+              <div className="flex items-center space-x-3">
+                <div className="h-10 w-10 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 flex items-center justify-center">
+                  <span className="text-white font-medium">
+                    {(user?.firstName?.[0] || user?.username?.[0] || 'U').toUpperCase()}
+                  </span>
+                </div>
+                <div>
+                  <p className="font-medium text-gray-900 dark:text-white">
+                    {user?.firstName || user?.username || 'User'}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {user?.email}
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={handleLogout}
+                className="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30"
+              >
+                <LogOut className="h-5 w-5" />
+              </Button>
+            </div>
+            
             <NavLink to="/dashboard" activePath="/dashboard">
+              <LayoutDashboard className="h-4 w-4 mr-2" />
               Dashboard
             </NavLink>
             
-            {/* Premium Dashboard Link */}
             {(currentUser?.premium?.isPremium || currentUser?.role === 'admin') && (
               <NavLink to="/premium" activePath="/premium">
-                Premium Dashboard
+                <BarChart4 className="h-4 w-4 mr-2" />
+                Premium
               </NavLink>
             )}
             
             {currentUser?.role === 'admin' && (
               <NavLink to="/admin" activePath="/admin">
-                Admin Dashboard
+                <ShieldCheck className="h-4 w-4 mr-2" />
+                Admin
               </NavLink>
             )}
             
             {(currentUser?.role === 'lender' || currentUser?.role === 'admin') && (
-              <NavLink 
-                to={user?.id ? `/lender/${user.id}` : '/lender'}
-                activePath="/lender"
-              >
-                Lender Dashboard
+              <NavLink to="/lender" activePath="/lender">
+                <BarChart4 className="h-4 w-4 mr-2" />
+                Lender
               </NavLink>
             )}
             
-            {isAuthenticated && (
-              <>
-                <div className="border-t border-gray-200 dark:border-gray-700 my-2"></div>
-                <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
-                  Logged in as: {user?.email}
-                </div>
-                <button
-                  onClick={handleLogout}
-                  className="w-full text-left px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900 rounded-md"
+            <div className="pt-2 border-t border-gray-200 dark:border-gray-800">
+              <div className="flex justify-between items-center px-3 py-2">
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  {darkMode ? 'Light Mode' : 'Dark Mode'}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleDarkModeToggle}
+                  className="text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
                 >
-                  Sign out
-                </button>
-              </>
-            )}
+                  {darkMode ? (
+                    <Sun className="h-5 w-5" />
+                  ) : (
+                    <Moon className="h-5 w-5" />
+                  )}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       )}

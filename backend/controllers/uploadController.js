@@ -1,5 +1,5 @@
 import csv from 'csv-parser';
-import xlsx from 'xlsx';
+import ExcelJS from 'exceljs';
 import streamifier from 'streamifier';
 import { parseString } from 'xml2js';
 import AppError from '../utils/appError.js';
@@ -63,9 +63,20 @@ async function detectAndParse(file) {
 
   if (mimeType.includes('excel') || mimeType.includes('spreadsheetml') || 
       fileName.endsWith('.xlsx') || fileName.endsWith('.xls')) {
-    const workbook = xlsx.read(file.buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const worksheet = workbook.getWorksheet(1); // Get first worksheet
+    const rows = [];
+    
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // Skip header row
+      const rowData = {};
+      row.eachCell((cell, colNumber) => {
+        rowData[`col${colNumber}`] = cell.value;
+      });
+      rows.push(rowData);
+    });
+    
     return rows;
   }
 

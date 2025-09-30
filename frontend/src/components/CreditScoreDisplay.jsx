@@ -4,7 +4,7 @@ import 'react-circular-progressbar/dist/styles.css';
 import { FiRefreshCw, FiInfo } from 'react-icons/fi';
 
 const CreditScoreDisplay = ({ 
-  score: initialScore = 700, 
+  score: initialScore = 0, 
   lastUpdated = new Date().toISOString(), 
   change = 0,
   onRefresh,
@@ -162,18 +162,25 @@ const CreditScoreDisplay = ({
       <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-700">
         <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-2">Score Breakdown</h3>
         <div className="space-y-2">
-          {[
-            { label: 'Payment History', value: '95%', color: 'bg-green-500' },
-            { label: 'Credit Usage', value: '30%', color: 'bg-blue-500' },
-            { label: 'Credit Age', value: '5yrs', color: 'bg-yellow-500' },
-            { label: 'Credit Mix', value: '3', color: 'bg-purple-500' },
-            { label: 'New Credit', value: '1', color: 'bg-red-500' },
-          ].map((item, index) => (
-            <div key={index} className="flex items-center justify-between text-sm">
-              <span className="text-gray-600 dark:text-gray-300">{item.label}</span>
-              <span className="font-medium text-gray-900 dark:text-white">{item.value}</span>
+          {initialScore > 0 ? (
+            [
+              { label: 'Payment History', value: '─', color: 'bg-green-500' },
+              { label: 'Credit Usage', value: '─', color: 'bg-blue-500' },
+              { label: 'Credit Age', value: '─', color: 'bg-yellow-500' },
+              { label: 'Credit Mix', value: '─', color: 'bg-purple-500' },
+              { label: 'New Credit', value: '─', color: 'bg-red-500' },
+            ].map((item, index) => (
+              <div key={index} className="flex items-center justify-between text-sm">
+                <span className="text-gray-600 dark:text-gray-300">{item.label}</span>
+                <span className="font-medium text-gray-900 dark:text-white">{item.value}</span>
+              </div>
+            ))
+          ) : (
+            <div className="text-center text-gray-500 dark:text-gray-400 py-4">
+              <p>No credit data available</p>
+              <p className="text-xs">Upload your credit data to see breakdown</p>
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>

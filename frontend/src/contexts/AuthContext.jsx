@@ -103,11 +103,28 @@ export const AuthProvider = ({ children }) => {
     };
   }, [checkAuth, user]);
 
-  const login = useCallback(async (email, password) => {
+  const login = useCallback(async (identifier, password) => {
     try {
-      console.debug('[Auth] Logging in...');
-      await fetchCsrfToken();
-      const userObj = await authService.login(email, password);
+      console.debug('[Auth] Logging in...', { identifier, password: '[HIDDEN]' });
+      
+      // Add timeout to prevent hanging
+      const loginPromise = (async () => {
+        console.debug('[Auth] Fetching CSRF token...');
+        await fetchCsrfToken();
+        console.debug('[Auth] CSRF token fetched, calling authService.login...');
+        const userObj = await authService.login(identifier, password);
+        console.debug('[Auth] authService.login completed:', userObj);
+        return userObj;
+      })();
+      
+      const userObj = await Promise.race([
+        loginPromise,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Login request timed out')), 30000)
+        )
+      ]);
+      
+      console.debug('[Auth] Login successful, normalizing user...');
       const authenticatedUser = normalizeUser(userObj);
       setUser(authenticatedUser);
       toast({

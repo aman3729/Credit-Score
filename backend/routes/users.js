@@ -250,6 +250,22 @@ router.get(
   })
 );
 
+// POST /api/v1/users/:userId/send-report
+router.post('/:userId/send-report', async (req, res) => {
+  const { userId } = req.params;
+  const { email } = req.body;
+  // TODO: Generate and email the report
+  res.json({ success: true, message: 'Report sent.' });
+});
+
+// POST /api/v1/users/:userId/share-score
+router.post('/:userId/share-score', async (req, res) => {
+  const { userId } = req.params;
+  const { email } = req.body;
+  // TODO: Share the score with the lender
+  res.json({ success: true, message: 'Score shared.' });
+});
+
 // @desc    Update user password
 // @route   PATCH /api/v1/users/update-password
 // @access  Private

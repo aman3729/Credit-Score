@@ -46,18 +46,7 @@ api.interceptors.request.use(
 );
 
 // Request interceptor to add auth token to requests
-api.interceptors.request.use(
-  (config) => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
-  }
-);
+// Removed Bearer token injection. We rely on httpOnly auth cookies set by the server.
 
 // Response interceptor to handle errors and token refresh
 api.interceptors.response.use(
@@ -71,64 +60,16 @@ api.interceptors.response.use(
       showErrorToast(error);
       return Promise.reject(error);
     }
-
-    // If we're already refreshing the token, add to queue
-    if (isRefreshing) {
-      return new Promise((resolve, reject) => {
-        failedQueue.push({ resolve, reject });
-      }).then(token => {
-        originalRequest.headers.Authorization = `Bearer ${token}`;
-        return api(originalRequest);
-      }).catch(err => {
-        return Promise.reject(err);
-      });
-    }
-
-    // If this is a refresh token request or we don't have a refresh token, logout
-    if (originalRequest.url.includes('/auth/refresh-token') || !localStorage.getItem('refreshToken')) {
-      logoutUser();
-      return Promise.reject(error);
-    }
-
-    // Try to refresh the token
-    isRefreshing = true;
-
-    try {
-      const { data } = await axios.post(
-        `${api.defaults.baseURL}/auth/refresh-token`,
-        { refreshToken: localStorage.getItem('refreshToken') },
-        { withCredentials: true }
-      );
-
-      // Update tokens
-      localStorage.setItem('token', data.accessToken);
-      if (data.refreshToken) {
-        localStorage.setItem('refreshToken', data.refreshToken);
-      }
-
-      // Update the original request with new token
-      originalRequest.headers.Authorization = `Bearer ${data.accessToken}`;
-
-      // Process any queued requests
-      processQueue(null, data.accessToken);
-      isRefreshing = false;
-
-      // Retry the original request
-      return api(originalRequest);
-    } catch (refreshError) {
-      // If refresh fails, clear tokens and redirect to login
-      processQueue(refreshError, null);
-      logoutUser();
-      return Promise.reject(refreshError);
-    }
+    // For cookie-based auth, simply redirect to login on 401
+    logoutUser();
+    return Promise.reject(error);
   }
 );
 
 // Helper function to handle user logout
 const logoutUser = () => {
-  localStorage.removeItem('token');
-  localStorage.removeItem('refreshToken');
-  // Redirect to login page
+  // Tokens are stored in httpOnly cookies by the server.
+  // Just navigate to login; server will clear cookies on logout endpoint if needed.
   if (window.location.pathname !== '/login') {
     window.location.href = '/login';
   }

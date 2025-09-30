@@ -10,6 +10,9 @@ dotenv.config();
 const ADMIN_EMAIL = 'admin@example.com';
 const ADMIN_PASSWORD = 'Admin123!';
 const ADMIN_USERNAME = 'admin';
+const ADMIN_NAME = 'System Administrator';
+const ADMIN_PHONE = '+251911234567';
+const ADMIN_BANK = 'CBE';
 
 // Salt rounds for password hashing
 const SALT_ROUNDS = 10;
@@ -32,16 +35,15 @@ export async function initAdmin() {
       username: ADMIN_USERNAME,
       email: ADMIN_EMAIL,
       password: ADMIN_PASSWORD,
+      name: ADMIN_NAME,
+      phoneNumber: ADMIN_PHONE,
+      bankId: ADMIN_BANK,
       role: 'admin',
       emailVerified: true,
       plan: 'premium'
     });
 
     // Save admin user (password will be hashed automatically by the User model)
-    await adminUser.save();
-    console.log('Admin user created successfully');
-
-    // Save admin user
     await adminUser.save();
     console.log('Admin user created successfully');
 

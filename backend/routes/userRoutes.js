@@ -342,7 +342,9 @@ router.get('/:identifier/credit-data', auth, requireValidConsent, async (req, re
       
       let freshLendingDecision;
       try {
-        freshLendingDecision = evaluateLendingDecision(scoreResultForLending, userDataForLending);
+        // IMPORTANT: evaluateLendingDecision is async; await it and pass bank code for proper config
+        const bankCode = req.user?.bankId || null;
+        freshLendingDecision = await evaluateLendingDecision(scoreResultForLending, userDataForLending, bankCode);
         console.log('DEBUG: freshLendingDecision:', JSON.stringify(freshLendingDecision, null, 2));
       } catch (lendingError) {
         console.error('DEBUG: Lending decision error:', lendingError);

@@ -16,30 +16,98 @@ import { useState } from 'react';
 
 const PremiumToolsPanel = ({ user, creditData }) => {
   const [openTool, setOpenTool] = useState(null); // 'score' | 'eligibility' | 'offer' | 'dti' | null
-  const [simInput, setSimInput] = useState({ paymentHistory: 0.95, utilization: 0.3, score: 700, income: 5000, debt: 1000, collateral: 0 });
+  const [simInput, setSimInput] = useState({ paymentHistory: 0.8, utilization: 0.3, score: 650, income: 4000, debt: 800, collateral: 0 });
   const [simResult, setSimResult] = useState(null);
 
   const handleSimChange = e => setSimInput(f => ({ ...f, [e.target.name]: e.target.value }));
 
-  const handleScoreSim = () => {
-    // Simple score simulation logic (replace with real logic or API call)
-    const { paymentHistory, utilization } = simInput;
-    const score = Math.round(300 + paymentHistory * 300 + (1 - utilization) * 250);
-    setSimResult(`Simulated Score: ${score}`);
+  const handleScoreSim = async () => {
+    try {
+      const response = await fetch('/api/score/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          paymentHistory: simInput.paymentHistory,
+          utilization: simInput.utilization,
+          income: simInput.income,
+          debt: simInput.debt
+        })
+      });
+      const data = await response.json();
+      if (data.score !== undefined) {
+        setSimResult(`Simulated Score: ${data.score}`);
+      } else {
+        setSimResult('Simulation not available');
+      }
+    } catch (error) {
+      setSimResult('Simulation service unavailable');
+    }
   };
-  const handleEligibility = () => {
-    // Simple eligibility logic (replace with real logic or API call)
-    const eligible = simInput.score > 650 && simInput.income > 2000 && simInput.debt / simInput.income < 0.4;
-    setSimResult(eligible ? 'Eligible for loan' : 'Not eligible for loan');
+  
+  const handleEligibility = async () => {
+    try {
+      const response = await fetch('/api/loan/eligibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          score: simInput.score,
+          income: simInput.income,
+          debt: simInput.debt
+        })
+      });
+      const data = await response.json();
+      if (data.eligible !== undefined) {
+        setSimResult(data.eligible ? 'Eligible for loan' : 'Not eligible for loan');
+      } else {
+        setSimResult('Eligibility check not available');
+      }
+    } catch (error) {
+      setSimResult('Eligibility service unavailable');
+    }
   };
-  const handleOffer = () => {
-    // Simple offer logic (replace with real logic or API call)
-    if (simInput.score < 600) setSimResult('No offers available');
-    else setSimResult(`Offer: $${simInput.income * 3} at 12% for 24 months`);
+  
+  const handleOffer = async () => {
+    try {
+      const response = await fetch('/api/loan/offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          score: simInput.score,
+          income: simInput.income,
+          collateral: simInput.collateral
+        })
+      });
+      const data = await response.json();
+      if (data.offer) {
+        setSimResult(`Offer: $${data.offer.amount} at ${data.offer.rate}% for ${data.offer.term} months`);
+      } else {
+        setSimResult('No offers available');
+      }
+    } catch (error) {
+      setSimResult('Offer service unavailable');
+    }
   };
-  const handleDTI = () => {
-    const dti = (simInput.debt / simInput.income) * 100;
+  
+  const handleDTI = async () => {
+    try {
+      const response = await fetch('/api/loan/dti', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          income: simInput.income,
+          debt: simInput.debt
+        })
+      });
+      const data = await response.json();
+      if (data.dti !== undefined) {
+        const dti = data.dti * 100;
     setSimResult(`DTI: ${dti.toFixed(1)}% (${dti < 36 ? 'Good' : 'High'})`);
+      } else {
+        setSimResult('DTI calculation not available');
+      }
+    } catch (error) {
+      setSimResult('DTI service unavailable');
+    }
   };
 
   const tools = [

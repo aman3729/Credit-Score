@@ -37,6 +37,16 @@ This document provides an overview of the major backend API endpoints, grouped b
 ## Uploads
 - **POST /api/upload** — Upload credit data file
 - **GET /api/upload/history** — Get upload history
+- **POST /api/upload/create-session** — Create chunked upload session
+- **POST /api/upload/upload-chunk** — Upload file chunk
+- **POST /api/upload/finalize** — Finalize chunked upload
+- **GET /api/upload/session/:sessionId** — Get session status
+- **DELETE /api/upload/session/:sessionId** — Cancel upload session
+- **GET /api/upload/mapping-profiles** — Get mapping profiles
+- **POST /api/upload/mapping-profiles** — Create mapping profile
+- **GET /api/upload/mapping-profiles/:id** — Get mapping profile by ID
+- **PUT /api/upload/mapping-profiles/:id** — Update mapping profile
+- **DELETE /api/upload/mapping-profiles/:id** — Delete mapping profile
 
 ## Admin
 - **GET /api/admin/audit-logs** — Get audit logs

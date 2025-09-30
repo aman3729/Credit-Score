@@ -1,6 +1,9 @@
 // Utility functions for LenderDashboard
 import { api } from '../../lib/api';
 
+// Keep track of the current in-flight search request so we can cancel it
+let currentSearchController = null;
+
 export const searchUsers = async (query, setUsers, setLoading, toast, logout, navigate) => {
   if (!query.trim()) {
     setUsers([]);
@@ -8,10 +11,22 @@ export const searchUsers = async (query, setUsers, setLoading, toast, logout, na
   }
   try {
     setLoading(true);
-    const response = await api.get(`/lenders/search-borrowers?search=${encodeURIComponent(query)}`);
+    // Cancel any ongoing search before starting a new one
+    if (currentSearchController) {
+      currentSearchController.abort();
+    }
+    currentSearchController = new AbortController();
+    const response = await api.get(
+      `/lenders/search-borrowers?search=${encodeURIComponent(query)}`,
+      { signal: currentSearchController.signal }
+    );
     const usersList = Array.isArray(response.data.data) ? response.data.data : [];
     setUsers(usersList);
   } catch (err) {
+    // Ignore cancellations from previous searches
+    if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.message === 'canceled') {
+      return;
+    }
     console.error('Error searching users:', err);
     if (err.response?.status === 401 || err.response?.status === 403) {
       toast({
@@ -75,12 +90,19 @@ export const fetchDashboardMetrics = async (setDashboardMetrics, toast) => {
     const approvedCount = decisions.filter(d => d.lendingDecision?.decision === 'Approve').length;
     const pendingCount = decisions.filter(d => d.lendingDecision?.decision === 'Review').length;
     const rejectedCount = decisions.filter(d => d.lendingDecision?.decision === 'Reject').length;
+    // Calculate risk breakdown from actual decisions
+    const riskBreakdown = {
+      low: decisions.filter(d => (d.creditScore?.fico?.score || 0) >= 740).length,
+      medium: decisions.filter(d => (d.creditScore?.fico?.score || 0) >= 670 && (d.creditScore?.fico?.score || 0) < 740).length,
+      high: decisions.filter(d => (d.creditScore?.fico?.score || 0) < 670).length
+    };
+    
     setDashboardMetrics({
       approvedLoans: approvedCount,
       pendingLoans: pendingCount,
       rejectedLoans: rejectedCount,
-      avgDecisionTime: '2.5m',
-      riskBreakdown: { low: 35, medium: 45, high: 20 }
+      avgDecisionTime: '─', // TODO: Calculate actual average decision time
+      riskBreakdown
     });
   } catch (error) {
     setDashboardMetrics({

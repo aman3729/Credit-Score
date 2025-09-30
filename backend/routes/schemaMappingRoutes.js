@@ -1,23 +1,19 @@
 import express from 'express';
-import multer from 'multer';
 import { auth, requireAdmin } from '../middleware/auth.js';
 import SchemaMappingService from '../services/schemaMappingService.js';
 import { logSecurityEvent } from '../services/securityLogs.js';
 import { calculateCreditScore } from '../utils/creditScoring.js';
 import csv from 'csv-parser';
-import xlsx from 'xlsx';
+import ExcelJS from 'exceljs';
 import streamifier from 'streamifier';
 import { processRecord } from './uploadRoutes.js';
+import { uploadSingle } from '../middleware/upload.js';
 
 console.log('🔧 Loading schema mapping routes...');
 
 const router = express.Router();
 
-// Configure multer for file uploads
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
-});
+// Using hardened upload middleware (size/type/magic-bytes validated)
 
 console.log('✅ Schema mapping routes loaded successfully!');
 
@@ -26,7 +22,8 @@ async function parseUploadedFile(file) {
   const mimeType = file.mimetype;
   
   if (mimeType === 'application/json') {
-    return JSON.parse(file.buffer.toString());
+    const jsonData = JSON.parse(file.buffer.toString());
+    return Array.isArray(jsonData) ? jsonData : [jsonData];
   }
   
   if (mimeType.includes('csv')) {
@@ -41,9 +38,20 @@ async function parseUploadedFile(file) {
   }
   
   if (mimeType.includes('excel') || mimeType.includes('spreadsheetml')) {
-    const workbook = xlsx.read(file.buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const rows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const worksheet = workbook.getWorksheet(1);
+    const rows = [];
+    
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // Skip header row
+      const rowData = {};
+      row.eachCell((cell, colNumber) => {
+        rowData[`col${colNumber}`] = cell.value;
+      });
+      rows.push(rowData);
+    });
+    
     return rows;
   }
   
@@ -55,7 +63,7 @@ async function parseUploadedFile(file) {
  * @desc    Detect fields in uploaded file and suggest mappings
  * @access  Private/Admin
  */
-router.post('/detect-fields', auth, requireAdmin, upload.single('file'), async (req, res) => {
+router.post('/detect-fields', auth, requireAdmin, ...uploadSingle('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -122,8 +130,12 @@ router.post('/create', auth, requireAdmin, async (req, res) => {
       fileType,
       fieldMappings,
       sampleData,
-      validationRules
+      validationRules,
+      engineType = 'default' // Default to 'default' if not specified
     } = req.body;
+
+    // Debug log for engineType
+    console.log('[DEBUG] engineType received in mapping creation:', engineType);
 
     // Validate required fields
     if (!name || !partnerId || !partnerName || !fileType || !fieldMappings) {
@@ -140,6 +152,7 @@ router.post('/create', auth, requireAdmin, async (req, res) => {
       partnerId,
       partnerName,
       fileType,
+      engineType, // Pass engineType to the service
       fieldMappings: new Map(Object.entries(fieldMappings)),
       sampleData,
       validationRules
@@ -240,7 +253,7 @@ router.delete('/:mappingId', auth, requireAdmin, async (req, res) => {
  * @desc    Apply a schema mapping to uploaded data and score it
  * @access  Private/Admin
  */
-router.post('/apply/:mappingId', auth, requireAdmin, upload.single('file'), async (req, res) => {
+router.post('/apply/:mappingId', auth, requireAdmin, ...uploadSingle('file'), async (req, res) => {
   try {
     const { mappingId } = req.params;
     const { partnerId, autoScore = true } = req.body;
@@ -269,8 +282,6 @@ router.post('/apply/:mappingId', auth, requireAdmin, upload.single('file'), asyn
       });
     }
 
-    console.log('DEBUG req.user:', req.user);
-    console.log('DEBUG uploadedBy:', req.user && req.user._id);
     // Apply the mapping
     const mappingResult = await SchemaMappingService.applyMappingToData(
       data,
@@ -291,8 +302,7 @@ router.post('/apply/:mappingId', auth, requireAdmin, upload.single('file'), asyn
         const mappedRecord = mappingResult.mappedData[i];
         // Call processRecord to create/update CreditScore and CreditReport
         try {
-          const processResult = await processRecord(mappedRecord, req.user, autoScore, req);
-          console.log('[SCHEMA_MAPPING] processRecord result:', processResult);
+          await processRecord(mappedRecord, req.user, autoScore, req);
         } catch (err) {
           console.error('[SCHEMA_MAPPING] processRecord error:', err);
         }
@@ -310,12 +320,12 @@ router.post('/apply/:mappingId', auth, requireAdmin, upload.single('file'), asyn
           totalScore += scoreResult.score;
           scoredRecords++;
         } catch (e) {
-        scoringResults.push({
-          originalIndex: i,
-          phoneNumber: mappedRecord.phoneNumber,
+          scoringResults.push({
+            originalIndex: i,
+            phoneNumber: mappedRecord.phoneNumber,
             error: e.message,
-          mappedData: mappedRecord
-        });
+            mappedData: mappedRecord
+          });
         }
       }
     }
@@ -395,55 +405,16 @@ router.post('/test-mapping', auth, requireAdmin, async (req, res) => {
       });
     }
 
-    // Create a temporary mapping object for testing
-    const tempMapping = {
-      fieldMappings: new Map(Object.entries(fieldMappings))
-    };
-
-    // Apply the mapping to sample data
-    const results = [];
-    const errors = [];
-    
-    for (let i = 0; i < sampleData.length; i++) {
-      try {
-        const { mappedData, errors: rowErrors } = tempMapping.applyMapping(sampleData[i]);
-        
-        if (rowErrors.length === 0) {
-          results.push(mappedData);
-        } else {
-          errors.push({
-            row: i + 1,
-            errors: rowErrors,
-            originalData: sampleData[i]
-          });
-        }
-      } catch (error) {
-        errors.push({
-          row: i + 1,
-          errors: [error.message],
-          originalData: sampleData[i]
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      data: {
-        mappedData: results,
-        errors,
-        successCount: results.length,
-        errorCount: errors.length,
-        successRate: results.length / sampleData.length
-      }
-    });
+    // This functionality requires service implementation
+    throw new Error('Test mapping functionality is not implemented in this version');
     
   } catch (error) {
     console.error('Test mapping error:', error);
-    res.status(500).json({
+    res.status(501).json({
       success: false,
       message: error.message
     });
   }
 });
 
-export default router; 
+export default router;

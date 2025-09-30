@@ -1,6 +1,5 @@
 import { generateAIScore } from '../utils/gptScoring.js';
 import { calculateCreditScore as calculateScore } from '../utils/creditScoring.js';
-import { calculateCreditworthiness } from '../utils/newScoringEngine.js';
 import { evaluateLendingDecision } from '../utils/lendingDecision.js';
 import CreditReport from '../models/CreditReport.js';
 import CreditScore from '../models/CreditScore.js';
@@ -8,7 +7,9 @@ import User from '../models/User.js';
 import AppError from '../utils/appError.js';
 import catchAsync from '../utils/catchAsync.js';
 import { logger, securityLogger } from '../config/logger.js';
-import { sendCreditScoreUpdateEmail } from '../utils/email.js';
+import { sendCreditScoreUpdateEmail } from '../config/email.js';
+import { calculateCreditworthiness } from '../utils/creditworthinessEngine.js';
+import { mapToCreditworthinessSchema } from '../services/schemaMappingService.js';
 
 // Helper function to determine credit score category
 const getCreditScoreCategory = (score) => {
@@ -21,7 +22,7 @@ const getCreditScoreCategory = (score) => {
 
 // Helper function to calculate score change
 const calculateScoreChange = (currentScore, previousScore) => {
-  if (!previousScore) return null;
+  if (previousScore === null || previousScore === undefined) return null;
   return {
     points: currentScore - previousScore,
     percentage: ((currentScore - previousScore) / previousScore) * 100,
@@ -37,21 +38,25 @@ const calculateCreditScore = catchAsync(async (req, res, next) => {
   const { engine } = req.query;
   const creditData = req.body;
 
-  // Validate required fields for the default engine if no other engine is specified
+  // Validate required fields for the default engine
   if (!engine) {
-    const requiredFields = {
-      paymentHistory: creditData.paymentHistory,
-      creditUtilization: creditData.creditUtilization,
-      creditAge: creditData.creditAge,
-      creditMix: creditData.creditMix,
-      inquiries: creditData.inquiries
-    };
-    const missingFields = Object.entries(requiredFields)
-      .filter(([_, value]) => value === undefined)
-      .map(([key]) => key);
+    const requiredFields = [
+      'paymentHistory', 
+      'creditUtilization', 
+      'creditAge', 
+      'creditMix', 
+      'inquiries'
+    ];
+    
+    const missingFields = requiredFields.filter(
+      field => creditData[field] === undefined
+    );
 
     if (missingFields.length > 0) {
-      return next(new AppError(`Missing required credit factors for default engine: ${missingFields.join(', ')}`, 400));
+      return next(new AppError(
+        `Missing required credit factors: ${missingFields.join(', ')}`, 
+        400
+      ));
     }
   }
 
@@ -65,12 +70,8 @@ const calculateCreditScore = catchAsync(async (req, res, next) => {
         result.engineVersion = result.version || null;
         break;
       case 'creditworthiness':
-        result = calculateCreditworthiness(creditData);
-        // The new engine returns a different structure, so we adapt it.
-        result = {
-          score: result.totalScore,
-          ...result
-        };
+        const mappedData = mapToCreditworthinessSchema(creditData);
+        result = calculateCreditworthiness(mappedData, req.body.options || {});
         result.engine = 'creditworthiness';
         result.engineVersion = result.version || null;
         break;
@@ -81,19 +82,18 @@ const calculateCreditScore = catchAsync(async (req, res, next) => {
           summary: 'Manual scoring completed',
           ai: false,
           category: getCreditScoreCategory(score),
-          factors: creditData
+          factors: creditData,
+          engine: 'default',
+          engineVersion: null
         };
-        result.engine = 'default';
-        result.engineVersion = null;
         break;
     }
 
-    // Log the calculation
     logger.info('Credit score calculated', {
       userId: req.user?.id,
       score: result.score,
-      method: engine || 'manual',
-      factors: result.factors || creditData || {}
+      method: engine || 'default',
+      engineVersion: result.engineVersion
     });
 
     res.status(200).json({
@@ -103,12 +103,14 @@ const calculateCreditScore = catchAsync(async (req, res, next) => {
   } catch (error) {
     logger.error('Error calculating credit score', {
       error: error.message,
-      stack: error.stack,
       userId: req.user?.id,
       engine
     });
 
-    return next(new AppError('Failed to calculate credit score. Please try again later.', 500));
+    return next(new AppError(
+      error.message || 'Failed to calculate credit score', 
+      error.statusCode || 500
+    ));
   }
 });
 
@@ -120,35 +122,40 @@ const calculateCreditScore = catchAsync(async (req, res, next) => {
 const saveCreditScore = catchAsync(async (req, res, next) => {
   const { score: scoreData, factors, notes } = req.body;
   
-  // Validate required fields
   if (!scoreData || !factors) {
     return next(new AppError('Score and factors are required', 400));
   }
   
-  // Extract score value from scoreData if it's an object
+  // Extract score value
   const score = typeof scoreData === 'object' ? scoreData.score : scoreData;
   const classification = scoreData.classification || getCreditScoreCategory(score);
   const breakdown = scoreData.breakdown || {};
   
-  // Validate score is a number
   if (typeof score !== 'number' || isNaN(score)) {
-    return next(new AppError('Invalid score format. Score must be a number', 400));
+    return next(new AppError('Invalid score format', 400));
   }
   
-  // Get the previous score for comparison
-  const previousScore = await CreditScore.findOne({ user: req.user.id })
+  // Get previous score
+  const previousScoreDoc = await CreditScore.findOne({ user: req.user.id })
     .sort({ createdAt: -1 })
     .select('score');
-  
-  // Evaluate lending decision
+
+  const previousScore = previousScoreDoc?.score || null;
+
+  // Evaluate lending decision with proper data
   const lendingDecision = evaluateLendingDecision({
     score,
     classification,
     breakdown,
-    ...userData // Include any additional user data needed for decision making
+    factors,
+    user: {
+      id: req.user.id,
+      role: req.user.role,
+      bankId: req.user.bankId
+    }
   });
 
-  // Create new credit score record with lending decision
+  // Create new credit score record
   const creditScore = await CreditScore.create({
     user: req.user.id,
     score,
@@ -156,7 +163,7 @@ const saveCreditScore = catchAsync(async (req, res, next) => {
     breakdown,
     factors,
     notes,
-    previousScore: previousScore?.score || null,
+    previousScore,
     lendingDecision: {
       decision: lendingDecision.decision,
       reasons: lendingDecision.reasons,
@@ -165,19 +172,19 @@ const saveCreditScore = catchAsync(async (req, res, next) => {
     }
   });
   
-  // Automatically create or update CreditReport for this user
+  // Update or create credit report
   const creditReportUpdate = {
     userId: req.user.id,
     creditScore: { fico: { score } },
-    creditAge: factors?.creditAge ?? req.body.creditAge ?? req.user.creditAge ?? 0,
+    creditAge: factors.creditAge || 0,
     creditUtilization: {
-      overall: factors?.creditUtilization ?? req.body.creditUtilization ?? req.user.creditUtilization ?? 0,
+      overall: factors.creditUtilization || 0,
       byAccount: []
     },
-    totalDebt: factors?.totalDebt ?? req.body.totalDebt ?? req.user.totalDebt ?? 0,
-    paymentHistory: factors?.paymentHistory ?? req.body.paymentHistory ?? req.user.paymentHistory ?? 0,
-    creditMix: factors?.creditMix ?? req.body.creditMix ?? req.user.creditMix ?? 0,
-    inquiries: factors?.inquiries ?? req.body.inquiries ?? req.user.inquiries ?? 0,
+    totalDebt: factors.totalDebt || 0,
+    paymentHistory: factors.paymentHistory || 0,
+    creditMix: factors.creditMix || 0,
+    inquiries: factors.inquiries || 0,
     updatedAt: new Date(),
     lendingDecision: {
       decision: lendingDecision.decision,
@@ -186,7 +193,8 @@ const saveCreditScore = catchAsync(async (req, res, next) => {
       evaluatedAt: new Date()
     }
   };
-  const creditReport = await CreditReport.findOneAndUpdate(
+
+  await CreditReport.findOneAndUpdate(
     { userId: req.user.id },
     {
       $set: creditReportUpdate,
@@ -201,46 +209,39 @@ const saveCreditScore = catchAsync(async (req, res, next) => {
     },
     { upsert: true, new: true }
   );
-  logger.info('CreditReport updated or created', { userId: req.user.id, creditReport });
   
-  // Update user's current score if this is higher than their current score
-  if (!req.user.creditScore || score > req.user.creditScore) {
-    req.user.creditScore = creditScore._id;
-    await req.user.save({ validateBeforeSave: false });
-    
-    // If there was a previous score and it's different, send update email
-    if (previousScore?.score && previousScore.score !== score) {
-      try {
-        await sendCreditScoreUpdateEmail({
-          name: req.user.name,
-          email: req.user.email,
-          score,
-          previousScore: previousScore.score,
-          change: score - previousScore.score
-        });
-      } catch (error) {
-        logger.error('Error sending credit score update email', {
-          error: error.message,
-          userId: req.user.id
-        });
-        // Don't fail the request if email sending fails
-      }
+  // Update user's current score reference
+  req.user.creditScore = creditScore._id;
+  await req.user.save({ validateBeforeSave: false });
+  
+  // Send email notification if score changed
+  if (previousScore !== null && previousScore !== score) {
+    try {
+      await sendCreditScoreUpdateEmail({
+        name: req.user.name,
+        email: req.user.email,
+        score,
+        previousScore,
+        change: score - previousScore
+      });
+    } catch (emailError) {
+      logger.error('Error sending email', {
+        userId: req.user.id,
+        error: emailError.message
+      });
     }
   }
   
-  // Log the score save
   securityLogger.info('Credit score saved', {
     userId: req.user.id,
     score,
-    previousScore: previousScore?.score || null,
+    previousScore,
     ip: req.ip
   });
   
   res.status(201).json({
     status: 'success',
-    data: {
-      creditScore
-    }
+    data: { creditScore }
   });
 });
 
@@ -252,73 +253,59 @@ const saveCreditScore = catchAsync(async (req, res, next) => {
 const getCreditReport = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
   
-  // Find the user to verify they exist
   const user = await User.findById(userId).select('firstName lastName email bankId');
   if (!user) {
     return next(new AppError('User not found', 404));
   }
 
-  // Check if the requesting user has permission
+  // Authorization check
   if (req.user.role !== 'admin' && req.user.id !== userId) {
-    return next(new AppError('Not authorized to access this credit report', 403));
+    return next(new AppError('Unauthorized access', 403));
   }
 
-  // Restrict lender access to only their bank's users
   if (req.user.role === 'lender' && user.bankId !== req.user.bankId) {
-    return next(new AppError('You do not have permission to access this credit report', 403));
+    return next(new AppError('Access restricted to bank members', 403));
   }
 
-  // Try to find existing credit report
   let creditReport = await CreditReport.findOne({ userId });
   
-  // If no report exists, create a new one with default values
+  // Create new report if not exists
   if (!creditReport) {
     creditReport = await CreditReport.create({
       userId,
       personalInfo: {
-        name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown User',
+        name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown',
         email: user.email,
-        ssn: '',
         addresses: [],
         employers: []
       },
       creditScore: {
-        fico: { score: 700, version: 'FICO 9', lastUpdated: new Date() },
-        vantageScore: { score: 700, version: 'VantageScore 4.0', lastUpdated: new Date() }
+        fico: { score: 700, version: 'FICO 9' },
+        vantageScore: { score: 700, version: 'VantageScore 4.0' }
       },
       creditAccounts: [],
       inquiries: [],
       publicRecords: [],
-      status: 'active',
-      lastUpdated: new Date()
+      status: 'active'
     });
     
-    logger.info('Created new credit report', {
-      userId,
-      reportId: creditReport._id,
-      adminId: req.user.role === 'admin' ? req.user.id : null
-    });
+    logger.info('Created credit report', { userId });
   }
 
-  // Log the access
   securityLogger.info('Credit report accessed', {
     reportId: creditReport._id,
-    userId,
     accessedBy: req.user.id,
-    role: req.user.role,
-    ip: req.ip
+    role: req.user.role
   });
 
   res.status(200).json({
     status: 'success',
-    data: {
-      creditReport
-    }
+    data: { creditReport }
   });
 });
 
 /**
- * @desc    Update a credit report (admin only)
+ * @desc    Update a credit report
  * @route   PATCH /api/v1/credit-reports/:userId
  * @access  Private/Admin
  */
@@ -326,63 +313,48 @@ const updateCreditReport = catchAsync(async (req, res, next) => {
   const { userId } = req.params;
   const updates = req.body;
   
-  // Find the user to verify they exist
   const user = await User.findById(userId);
   if (!user) {
     return next(new AppError('User not found', 404));
   }
 
-  // Find and update the credit report
   const creditReport = await CreditReport.findOneAndUpdate(
     { userId },
-    { 
-      $set: { 
-        ...updates,
-        lastUpdated: new Date() 
-      } 
-    },
-    { 
-      new: true, 
-      runValidators: true,
-      context: 'query' 
-    }
-  ).orFail(new AppError('Credit report not found', 404));
+    { $set: updates },
+    { new: true, runValidators: true }
+  );
+
+  if (!creditReport) {
+    return next(new AppError('Credit report not found', 404));
+  }
   
-  // Log the update
   securityLogger.info('Credit report updated', {
     reportId: creditReport._id,
-    userId,
     updatedBy: req.user.id,
-    updatedFields: Object.keys(updates),
-    ip: req.ip
+    updatedFields: Object.keys(updates)
   });
 
   res.status(200).json({
     status: 'success',
-    data: {
-      creditReport
-    }
+    data: { creditReport }
   });
 });
 
 /**
- * @desc    Get all credit reports with pagination (admin only)
+ * @desc    Get all credit reports
  * @route   GET /api/v1/credit-reports
  * @access  Private/Admin
  */
 const getAllCreditReports = catchAsync(async (req, res, next) => {
-  // 1) Parse pagination parameters
   const page = parseInt(req.query.page, 10) || 1;
   const limit = parseInt(req.query.limit, 10) || 20;
   const skip = (page - 1) * limit;
   
-  // 2) Build the base query
   const query = {};
   
-  // Add search filter if provided
+  // Search filter
   if (req.query.search) {
-    // Search by user email or name
-    const userIds = await User.find({
+    const users = await User.find({
       $or: [
         { email: { $regex: req.query.search, $options: 'i' } },
         { firstName: { $regex: req.query.search, $options: 'i' } },
@@ -390,109 +362,61 @@ const getAllCreditReports = catchAsync(async (req, res, next) => {
       ]
     }).select('_id');
     
-    if (userIds.length > 0) {
-      query.userId = { $in: userIds.map(u => u._id) };
-    } else {
-      // If no users found, return empty result
-      query.userId = { $in: [] };
-    }
+    query.userId = { $in: users.map(u => u._id) };
   }
   
-  // 3) Add filters if provided
+  // Status filter
   if (req.query.status) {
     query.status = req.query.status;
   }
   
-  // Handle score filter
+  // Score filters
   if (req.query.filter) {
-    switch (req.query.filter) {
-      case 'excellent':
-        query['creditScore.fico.score'] = { $gte: 800 };
-        break;
-      case 'good':
-        query['creditScore.fico.score'] = { $gte: 700, $lt: 800 };
-        break;
-      case 'fair':
-        query['creditScore.fico.score'] = { $gte: 600, $lt: 700 };
-        break;
-      case 'poor':
-        query['creditScore.fico.score'] = { $lt: 600 };
-        break;
-      case 'flagged':
-        query.flagged = true;
-        break;
-      case 'all':
-      default:
-        // No additional filter
-        break;
+    const scoreRanges = {
+      'excellent': { $gte: 800 },
+      'good': { $gte: 700, $lt: 800 },
+      'fair': { $gte: 600, $lt: 700 },
+      'poor': { $lt: 600 }
+    };
+    
+    if (scoreRanges[req.query.filter]) {
+      query['creditScore.fico.score'] = scoreRanges[req.query.filter];
     }
   }
   
-  if (req.query.minScore) {
-    query['creditScore.fico.score'] = query['creditScore.fico.score'] || {};
-    query['creditScore.fico.score'].$gte = parseInt(req.query.minScore, 10);
-  }
-  
-  if (req.query.maxScore) {
-    query['creditScore.fico.score'] = query['creditScore.fico.score'] || {};
-    query['creditScore.fico.score'].$lte = parseInt(req.query.maxScore, 10);
-  }
-  
-  // Restrict lender access to only their bank's users
-  let userBankFilter = {};
+  // Bank restriction for lenders
   if (req.user.role === 'lender') {
-    userBankFilter.bankId = req.user.bankId;
-  }
-  if (Object.keys(userBankFilter).length > 0) {
-    const users = await User.find(userBankFilter).select('_id');
-    const userIds = users.map(u => u._id);
-    query.userId = { $in: userIds };
+    const bankUsers = await User.find({ bankId: req.user.bankId }).select('_id');
+    query.userId = { $in: bankUsers.map(u => u._id) };
   }
 
-  // 4) Execute count and find queries in parallel
   const [total, reports] = await Promise.all([
     CreditReport.countDocuments(query),
     CreditReport.find(query)
-      .sort({ 'creditScore.fico.score': -1, lastUpdated: -1 })
+      .sort({ 'creditScore.fico.score': -1 })
       .skip(skip)
       .limit(limit)
-      .lean()
   ]);
   
-  // 5) Get user details for each report
-  const reportUserIds = reports.map(r => r.userId).filter(Boolean);
-  let users = [];
+  // Get user details
+  const userIds = reports.map(r => r.userId);
+  const users = await User.find({ _id: { $in: userIds } })
+    .select('email firstName lastName role');
   
-  if (reportUserIds.length > 0) {
-    users = await User.find({ _id: { $in: reportUserIds } })
-      .select('email firstName lastName role')
-      .lean();
-  }
-  
-  // 6) Combine reports with user info
-  const reportsWithUserInfo = reports.map(report => {
-    const user = users.find(u => u && u._id.toString() === report.userId.toString());
-    return {
-      ...report,
-      user: user || null
-    };
+  const reportsWithUsers = reports.map(report => {
+    const user = users.find(u => u._id.equals(report.userId));
+    return { ...report.toObject(), user };
   });
   
-  // 7) Log the access
   securityLogger.info('All credit reports accessed', {
     count: reports.length,
-    total,
-    page,
-    limit,
-    accessedBy: req.user.id,
-    ip: req.ip
+    accessedBy: req.user.id
   });
 
-  // 8) Send response
   res.status(200).json({
     status: 'success',
     results: reports.length,
-    reports: reportsWithUserInfo,
+    data: reportsWithUsers,
     pagination: {
       current: page,
       totalPages: Math.ceil(total / limit),
@@ -503,40 +427,41 @@ const getAllCreditReports = catchAsync(async (req, res, next) => {
 });
 
 /**
- * @desc    Get credit score history for a user
+ * @desc    Get credit score history
  * @route   GET /api/v1/credit-scores/history
  * @access  Private
  */
 const getCreditScoreHistory = catchAsync(async (req, res, next) => {
-  const { userId } = req.params;
-  const requestingUserId = req.user.id;
-  
-  // Restrict lender access to only their bank's users
+  // Determine target user
+  let userId;
+  if (req.user.role === 'admin' && req.query.userId) {
+    userId = req.query.userId;
+  } else {
+    userId = req.user.id;
+  }
+
+  // Authorization
   if (req.user.role === 'lender') {
     const user = await User.findById(userId).select('bankId');
     if (!user || user.bankId !== req.user.bankId) {
-      return next(new AppError('You do not have permission to access this user\'s credit score history', 403));
+      return next(new AppError('Unauthorized access', 403));
     }
-  } else if (req.user.role !== 'admin' && requestingUserId !== userId) {
-    return next(new AppError('Not authorized to access this credit score history', 403));
+  } else if (req.user.role !== 'admin' && req.user.id !== userId) {
+    return next(new AppError('Unauthorized access', 403));
   }
   
-  // Get pagination parameters
+  // Pagination
   const page = parseInt(req.query.page, 10) || 1;
-  const limit = parseInt(req.query.limit, 10) || 12; // Default to 12 months
+  const limit = parseInt(req.query.limit, 10) || 12;
   const skip = (page - 1) * limit;
   
-  // Build the query
+  // Query
   const query = { user: userId };
   
-  // Add date range filter if provided
-  if (req.query.startDate || req.query.endDate) {
-    query.createdAt = {};
-    if (req.query.startDate) query.createdAt.$gte = new Date(req.query.startDate);
-    if (req.query.endDate) query.createdAt.$lte = new Date(req.query.endDate);
-  }
+  // Date filtering
+  if (req.query.startDate) query.createdAt.$gte = new Date(req.query.startDate);
+  if (req.query.endDate) query.createdAt.$lte = new Date(req.query.endDate);
   
-  // Execute count and find queries in parallel
   const [total, scores] = await Promise.all([
     CreditScore.countDocuments(query),
     CreditScore.find(query)
@@ -545,7 +470,7 @@ const getCreditScoreHistory = catchAsync(async (req, res, next) => {
       .limit(limit)
   ]);
   
-  // Calculate statistics
+  // Statistics
   const stats = await CreditScore.aggregate([
     { $match: { user: userId } },
     {
@@ -554,14 +479,7 @@ const getCreditScoreHistory = catchAsync(async (req, res, next) => {
         averageScore: { $avg: '$score' },
         highestScore: { $max: '$score' },
         lowestScore: { $min: '$score' },
-        scoreCount: { $sum: 1 },
-        scoreChanges: {
-          $push: {
-            score: '$score',
-            date: '$createdAt',
-            previousScore: '$previousScore'
-          }
-        }
+        count: { $sum: 1 }
       }
     },
     {
@@ -570,74 +488,22 @@ const getCreditScoreHistory = catchAsync(async (req, res, next) => {
         averageScore: { $round: ['$averageScore', 2] },
         highestScore: 1,
         lowestScore: 1,
-        scoreCount: 1,
-        lastUpdated: { $max: '$scoreChanges.date' },
-        scoreChanges: {
-          $map: {
-            input: '$scoreChanges',
-            as: 'score',
-            in: {
-              date: '$$score.date',
-              score: '$$score.score',
-              change: {
-                $cond: [
-                  { $eq: ['$$score.previousScore', null] },
-                  null,
-                  {
-                    points: { $subtract: ['$$score.score', '$$score.previousScore'] },
-                    percentage: {
-                      $multiply: [
-                        { $divide: [
-                          { $subtract: ['$$score.score', '$$score.previousScore'] },
-                          '$$score.previousScore'
-                        ]},
-                        100
-                      ]
-                    }
-                  }
-                ]
-              },
-              category: {
-                $switch: {
-                  branches: [
-                    { case: { $gte: ['$$score.score', 800] }, then: 'Exceptional' },
-                    { case: { $gte: ['$$score.score', 740] }, then: 'Very Good' },
-                    { case: { $gte: ['$$score.score', 670] }, then: 'Good' },
-                    { case: { $gte: ['$$score.score', 580] }, then: 'Fair' },
-                    { case: { $lt: ['$$score.score', 580] }, then: 'Poor' }
-                  ],
-                  default: 'Unknown'
-                }
-              }
-            }
-          }
-        }
+        count: 1
       }
     }
   ]);
   
-  // Log the access
-  securityLogger.info('Credit score history accessed', {
+  securityLogger.info('Credit history accessed', {
     userId,
-    accessedBy: requestingUserId,
-    role: req.user.role,
-    ip: req.ip
+    accessedBy: req.user.id
   });
   
-  // Prepare response
-  const result = {
+  res.status(200).json({
     status: 'success',
     results: scores.length,
     data: {
       scores,
-      stats: stats[0] || {
-        averageScore: 0,
-        highestScore: 0,
-        lowestScore: 0,
-        scoreCount: 0,
-        lastUpdated: null,
-        scoreChanges: []
-      }
+      stats: stats[0] || null
     },
     pagination: {
       total,
@@ -645,162 +511,79 @@ const getCreditScoreHistory = catchAsync(async (req, res, next) => {
       limit,
       totalPages: Math.ceil(total / limit)
     }
-  };
-  
-  res.status(200).json(result);
+  });
 });
 
 /**
- * @desc    Get credit score statistics (admin only)
+ * @desc    Get credit score statistics
  * @route   GET /api/v1/credit-scores/statistics
  * @access  Private/Admin
  */
 const getCreditScoreStatistics = catchAsync(async (req, res, next) => {
-  // Calculate date ranges
-  const now = new Date();
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(now.getDate() - 30);
-  
-  const ninetyDaysAgo = new Date();
-  ninetyDaysAgo.setDate(now.getDate() - 90);
-  
-  // Execute all aggregation pipelines in parallel
-  const [
-    scoreDistribution,
-    monthlyTrend,
-    scoreRanges,
-    averageScoresByRole,
-    recentScores
-  ] = await Promise.all([
+  const [distribution, trends, scoresByRole] = await Promise.all([
     // Score distribution
     CreditScore.aggregate([
       {
-        $group: {
-          _id: {
-            $switch: {
-              branches: [
-                { case: { $gte: ['$score', 800] }, then: '800-850' },
-                { case: { $gte: ['$score', 740] }, then: '740-799' },
-                { case: { $gte: ['$score', 670] }, then: '670-739' },
-                { case: { $gte: ['$score', 580] }, then: '580-669' },
-                { case: { $lt: ['$score', 580] }, then: '300-579' }
-              ],
-              default: 'Unknown'
-            }
-          },
-          count: { $sum: 1 }
+        $bucket: {
+          groupBy: "$score",
+          boundaries: [300, 580, 670, 740, 800, 851],
+          default: "Unknown",
+          output: {
+            count: { $sum: 1 },
+            avgScore: { $avg: "$score" }
+          }
         }
-      },
-      { $sort: { _id: 1 } }
+      }
     ]),
     
-    // Monthly trend (last 12 months)
-    CreditScore.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: new Date(new Date().setFullYear(new Date().getFullYear() - 1)) }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            year: { $year: '$createdAt' },
-            month: { $month: '$createdAt' }
-          },
-          averageScore: { $avg: '$score' },
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          period: { $concat: [
-            { $toString: '$_id.year' },
-            '-',
-            { $toString: { $lpad: ['$_id.month', 2, '0'] } }
-          ]},
-          averageScore: { $round: ['$averageScore', 2] },
-          count: 1
-        }
-      },
-      { $sort: { period: 1 } }
-    ]),
-    
-    // Score ranges
+    // Monthly trends
     CreditScore.aggregate([
       {
         $group: {
-          _id: null,
-          averageScore: { $avg: '$score' },
-          minScore: { $min: '$score' },
-          maxScore: { $max: '$score' },
-          medianScore: { $percentile: { p: [0.5], input: '$score', method: 'approximate' } },
-          stdDev: { $stdDevPop: '$score' },
-          totalScores: { $sum: 1 }
+          _id: {
+            year: { $year: "$createdAt" },
+            month: { $month: "$createdAt" }
+          },
+          avgScore: { $avg: "$score" },
+          count: { $sum: 1 }
         }
       },
-      { $project: { _id: 0 } }
+      { $sort: { "_id.year": 1, "_id.month": 1 } }
     ]),
     
-    // Average scores by user role
+    // Scores by user role
     CreditScore.aggregate([
       {
         $lookup: {
-          from: 'users',
-          localField: 'user',
-          foreignField: '_id',
-          as: 'userInfo'
+          from: "users",
+          localField: "user",
+          foreignField: "_id",
+          as: "userData"
         }
       },
-      { $unwind: '$userInfo' },
+      { $unwind: "$userData" },
       {
         $group: {
-          _id: '$userInfo.role',
-          averageScore: { $avg: '$score' },
+          _id: "$userData.role",
+          avgScore: { $avg: "$score" },
           count: { $sum: 1 }
         }
-      },
-      {
-        $project: {
-          _id: 0,
-          role: '$_id',
-          averageScore: { $round: ['$averageScore', 2] },
-          count: 1
-        }
-      },
-      { $sort: { averageScore: -1 } }
-    ]),
-    
-    // Recent scores (last 10)
-    CreditScore.find()
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .populate('user', 'name email role')
-      .lean()
+      }
+    ])
   ]);
-  
-  // Log the statistics access
-  securityLogger.info('Credit score statistics accessed', {
-    accessedBy: req.user.id,
-    ip: req.ip
-  });
-  
-  // Prepare response
-  const result = {
+
+  securityLogger.info('Statistics accessed', { by: req.user.id });
+
+  res.status(200).json({
     status: 'success',
     data: {
-      scoreDistribution,
-      monthlyTrend,
-      scoreRanges: scoreRanges[0] || {},
-      averageScoresByRole,
-      recentScores
+      distribution,
+      trends,
+      scoresByRole
     }
-  };
-  
-  res.status(200).json(result);
+  });
 });
 
-// Export all controller functions
 export {
   calculateCreditScore,
   saveCreditScore,
@@ -809,7 +592,6 @@ export {
   getAllCreditReports,
   getCreditScoreHistory,
   getCreditScoreStatistics,
-  // Export utility functions for testing
   getCreditScoreCategory,
   calculateScoreChange
 };

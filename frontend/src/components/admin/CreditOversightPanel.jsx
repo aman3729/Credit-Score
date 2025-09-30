@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
-import { RefreshCw, Flag, Badge, Filter, Search, Eye } from 'lucide-react';
+import { RefreshCw, Flag, Badge, Filter, Search, Eye, Upload } from 'lucide-react';
 import { Input } from '../ui/input';
 import {
   DropdownMenu,
@@ -25,7 +25,8 @@ const CreditOversightPanel = ({
   creditReports,
   toast,
   api,
-  onRefresh
+  onRefresh,
+  setActiveTab
 }) => (
   <Card className="border border-[#1a4a38]">
     <CardHeader>
@@ -62,6 +63,14 @@ const CreditOversightPanel = ({
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Recalculate Scores
+          </Button>
+          <Button 
+            variant="outline" 
+            onClick={() => setActiveTab('batch-uploads')}
+            className="border-[#ff9800] text-[#e68a00] hover:bg-[#fff3e0] dark:border-[#ffb74d] dark:text-[#ffcc02] dark:hover:bg-[#ff9800]/20"
+          >
+            <Upload className="mr-2 h-4 w-4" />
+            Batch Upload
           </Button>
           <Button 
             variant="outline" 
@@ -222,34 +231,106 @@ const CreditOversightPanel = ({
             </div>
           </div>
           <div className="rounded-md border border-[#1a4a38]">
-            <Table>
-              <TableHeader className="bg-[#f0f7f4] dark:bg-[#1a4a38]">
-                <TableRow>
-                  <TableHead className="font-semibold">User</TableHead>
-                  <TableHead className="font-semibold">Score</TableHead>
-                  <TableHead className="font-semibold">Factors</TableHead>
-                  <TableHead className="font-semibold">Status</TableHead>
-                  <TableHead className="font-semibold">Last Updated</TableHead>
-                  <TableHead className="text-right font-semibold">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {creditReports.map((report) => (
-                  <TableRow key={report.id} className="hover:bg-[#f0f7f4] dark:hover:bg-[#1a4a38]">
-                    <TableCell className="font-medium">{report.userName}</TableCell>
-                    <TableCell>{report.score}</TableCell>
-                    <TableCell>{report.factors}</TableCell>
-                    <TableCell>{report.status}</TableCell>
-                    <TableCell>{report.lastUpdated}</TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm">
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {/* Mobile Card List */}
+            <div className="block md:hidden space-y-3 w-full overflow-x-auto">
+              {creditReports.map((report) => {
+                // Score badge logic
+                let scoreLabel = 'Poor', scoreColor = 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
+                if (report.score >= 800) {
+                  scoreLabel = 'Excellent'; scoreColor = 'bg-[#4caf50]/20 text-green-800 dark:text-green-300';
+                } else if (report.score >= 700) {
+                  scoreLabel = 'Good'; scoreColor = 'bg-[#8bc34a]/20 text-lime-800 dark:text-lime-300';
+                } else if (report.score >= 600) {
+                  scoreLabel = 'Fair'; scoreColor = 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300';
+                }
+                return (
+                  <div
+                    key={report.id}
+                    className="bg-white dark:bg-[#0d261c] rounded-xl shadow border border-[#1a4a38] p-3 flex flex-col gap-2 w-full"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="bg-gradient-to-br from-[#8bc34a] to-[#2196f3] text-white h-8 w-8 rounded-full flex items-center justify-center shadow-sm">
+                          <span className="font-bold text-lg">{report.userName?.[0] || '?'}</span>
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900 dark:text-white text-sm">{report.userName}</div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${scoreColor}`}>{scoreLabel}</span>
+                            <span className="font-semibold text-gray-900 dark:text-white text-xs">{report.score}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 p-0 rounded-full hover:bg-gray-100 dark:hover:bg-[#1a4a38]"
+                            aria-label="Open credit report actions menu"
+                          >
+                            <Eye className="h-4 w-4 text-blue-500" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="min-w-[140px] rounded-xl shadow-xl p-1 bg-white dark:bg-[#0d261c] border border-gray-200 dark:border-[#2e4d3d]">
+                          <DropdownMenuItem className="px-3 py-2 text-sm flex items-center gap-2 hover:bg-[#f0f7f4] dark:hover:bg-[#1a4a38]">
+                            <Eye className="h-4 w-4 text-blue-500" /> View Details
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="px-3 py-2 text-sm flex items-center gap-2 hover:bg-[#f0f7f4] dark:hover:bg-[#1a4a38]">
+                            <Flag className="h-4 w-4 text-yellow-600" /> Flag Suspicious
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="px-3 py-2 text-sm flex items-center gap-2 hover:bg-[#f0f7f4] dark:hover:bg-[#1a4a38]">
+                            <RefreshCw className="h-4 w-4 text-green-600" /> Recalculate
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <div className="flex flex-wrap gap-2 items-center text-xs mt-1">
+                      <span className="bg-[#e3f2fd] text-[#1976d2] px-2 py-0.5 rounded-full">{report.status}</span>
+                      {report.factors && (
+                        <span className="bg-[#f0f7f4] text-gray-700 px-2 py-0.5 rounded-full">{report.factors}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center text-xs text-gray-500 dark:text-[#a8d5ba] mt-1">
+                      Last updated: {report.lastUpdated}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Desktop Table - Hidden on mobile */}
+            <div className="hidden md:block w-full overflow-x-auto">
+              <div className="min-w-[700px]">
+                <Table>
+                  <TableHeader className="bg-[#f0f7f4] dark:bg-[#1a4a38]">
+                    <TableRow>
+                      <TableHead className="font-semibold">User</TableHead>
+                      <TableHead className="font-semibold">Score</TableHead>
+                      <TableHead className="font-semibold">Factors</TableHead>
+                      <TableHead className="font-semibold">Status</TableHead>
+                      <TableHead className="font-semibold">Last Updated</TableHead>
+                      <TableHead className="text-right font-semibold">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {creditReports.map((report) => (
+                      <TableRow key={report.id} className="hover:bg-[#f0f7f4] dark:hover:bg-[#1a4a38]">
+                        <TableCell className="font-medium">{report.userName}</TableCell>
+                        <TableCell>{report.score}</TableCell>
+                        <TableCell>{report.factors}</TableCell>
+                        <TableCell>{report.status}</TableCell>
+                        <TableCell>{report.lastUpdated}</TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm">
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
           </div>
         </>
       )}

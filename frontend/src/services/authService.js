@@ -52,7 +52,11 @@ const register = async (userData) => {
   }
   // No need to set headers here; the interceptor will handle it
   const response = await api.post('/auth/register', userData);
-  return response.data.data.user;
+  if (response.data && response.data.data && response.data.data.user) {
+    return response.data.data.user;
+  }
+  // If no user object, return the whole response for message handling
+  return response.data;
 };
 
 export default {

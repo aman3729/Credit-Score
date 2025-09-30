@@ -5,8 +5,35 @@ import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import crypto from 'crypto';
 import { emailTemplates, sendEmail } from '../config/email.js';
-import { verificationLimiter, resendVerificationLimiter, authLimiter } from '../middleware/rateLimiter.js';
+import { rateLimiter } from '../middleware/rateLimiter.js';
 import AppError from '../utils/appError.js';
+import bcrypt from 'bcryptjs';
+import mongoose from 'mongoose';
+
+// Simple RefreshToken model inline to avoid extra imports (uses mongoose if available)
+const refreshTokenSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+  tokenHash: { type: String, index: true },
+  expiresAt: { type: Date, index: true },
+  revokedAt: Date,
+  replacedBy: String,
+  userAgent: String,
+  ip: String
+}, { timestamps: true });
+
+const RefreshToken = mongoose.models.RefreshToken || mongoose.model('RefreshToken', refreshTokenSchema);
+
+function signAccessToken(user) {
+  return jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '15m' });
+}
+
+function signRefreshToken(payload) {
+  return jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: process.env.REFRESH_TOKEN_EXPIRES || '7d' });
+}
+
+function hashToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 const router = express.Router();
 const skipEmailVerification = process.env.SKIP_EMAIL_VERIFICATION === 'true';
@@ -72,16 +99,6 @@ const registerValidation = [
     .isInt({ min: -50, max: 50 })
     .withMessage('Risk adjustment must be between -50 and 50')
 ];
-
-// Handle OPTIONS requests
-router.options('*', (req, res) => {
-  res.set({
-    'Access-Control-Allow-Origin': req.headers.origin || '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-Request-ID',
-    'Access-Control-Allow-Credentials': 'true'
-  }).status(204).send();  // Changed to 204 No Content
-});
 
 /**
  * @route   GET /api/v1/auth/verify-token
@@ -151,43 +168,91 @@ router.get('/me', protect, async (req, res, next) => {
   }
 });
 
+// Test endpoint to verify auth routes are working
+router.get('/test', (req, res) => {
+  res.json({ 
+    message: 'Auth routes are working!',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV
+  });
+});
+
+// Logout endpoint: clear auth cookies
+router.post('/logout', (req, res) => {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+  };
+  try {
+    res.clearCookie('jwt', cookieOptions);
+    // Clear potential legacy or auxiliary cookies
+    res.clearCookie('token', cookieOptions);
+    res.clearCookie('XSRF-TOKEN', {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+    });
+  } catch (e) {
+    // ignore clear errors
+  }
+  return res.status(200).json({ status: 'success', message: 'Logged out' });
+});
+
 // Login endpoint
-router.post('/login', authLimiter, async (req, res, next) => {
+router.post('/login', rateLimiter.auth, async (req, res, next) => {
+  if (process.env.NODE_ENV !== 'production') {
+    const hasIdentifier = Boolean(req.body?.identifier);
+    console.log('[Login] Request received', { hasIdentifier, ip: req.ip });
+  }
+  
   const { identifier, password } = req.body;
   if (!identifier || !password) {
+    console.log('[Login] Missing identifier or password');
     return next(new AppError('Identifier and password are required.', 400));
   }
+  
   let user = null;
   if (identifier.includes('@')) {
     user = await User.findOne({ email: identifier }).select('+password');
+    console.log('[Login] Searching by email:', identifier, 'User found:', !!user);
   } else {
     user = await User.findOne({ phoneNumber: identifier }).select('+password');
+    console.log('[Login] Searching by phone:', identifier, 'User found:', !!user);
   }
+  
   if (!user) {
+    console.log('[Login] User not found');
     return next(new AppError('Invalid credentials', 401));
   }
 
   // Check password
   const isPasswordValid = await user.matchPassword(password);
+  console.log('[Login] Password validation:', isPasswordValid);
   if (!isPasswordValid) {
+    console.log('[Login] Invalid password');
     return next(new AppError('Invalid credentials', 401));
   }
 
   // Check if email is verified
   if (!user.emailVerified) {
+    console.log('[Login] Email not verified');
     return next(new AppError('Email verification required', 403));
   }
 
   // Check account status
   if (user.status === 'pending') {
+    console.log('[Login] Account pending');
     return next(new AppError('Account pending verification', 403));
   }
 
   if (user.status === 'suspended') {
+    console.log('[Login] Account suspended');
     return next(new AppError('Account suspended', 403));
   }
 
   if (user.status === 'deactivated') {
+    console.log('[Login] Account deactivated');
     return next(new AppError('Account deactivated', 403));
   }
 
@@ -202,14 +267,51 @@ router.post('/login', authLimiter, async (req, res, next) => {
 
   // Generate JWT token
   const token = user.getSignedJwtToken();
+  console.log('[Login] JWT token generated successfully');
 
-  // Set JWT as httpOnly cookie
+  // Set Access Token as httpOnly cookie
   res.cookie('jwt', token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
     maxAge: 24 * 60 * 60 * 1000 // 1 day
   });
+
+  // Issue Refresh Token and set cookie
+  const rt = signRefreshToken({ id: user._id });
+  
+  // Validate refresh token was generated
+  if (!rt) {
+    console.error('[Login] Failed to generate refresh token');
+    return next(new AppError('Failed to generate refresh token', 500));
+  }
+  
+  const rtHash = hashToken(rt);
+  
+  try {
+    const rtDoc = new RefreshToken({
+      user: user._id,
+      tokenHash: rtHash,
+      expiresAt: new Date(Date.now() + (process.env.REFRESH_TOKEN_MAX_AGE_MS ? parseInt(process.env.REFRESH_TOKEN_MAX_AGE_MS, 10) : 7 * 24 * 60 * 60 * 1000)),
+      userAgent: req.get('User-Agent'),
+      ip: req.ip
+    });
+    
+    await rtDoc.save();
+  } catch (error) {
+    console.error('[Login] Error saving refresh token:', error);
+    // Don't fail the login if we can't save the refresh token
+    // The user can still use the access token until it expires
+  }
+
+  res.cookie('refresh_token', rt, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+    maxAge: process.env.REFRESH_TOKEN_MAX_AGE_MS ? parseInt(process.env.REFRESH_TOKEN_MAX_AGE_MS, 10) : 7 * 24 * 60 * 60 * 1000
+  });
+
+  console.log('[Login] Login successful for user:', user.email);
 
   // Respond with new structure
   res.status(200).json({
@@ -237,7 +339,11 @@ router.post('/register', [
     .matches(/^\+?\d{9,15}$/).withMessage('Phone number must be 9-15 digits, can start with +'),
   body('password').notEmpty().isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
 ], async (req, res, next) => {
-  console.log('[Signup] /register route hit. Payload:', req.body);
+  if (process.env.NODE_ENV !== 'production') {
+    const hasEmail = Boolean(req.body?.email);
+    const hasPhone = Boolean(req.body?.phoneNumber);
+    console.log('[Signup] /register route hit', { hasEmail, hasPhone });
+  }
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
@@ -260,6 +366,35 @@ router.post('/register', [
     const newUser = new User(req.body);
     if (req.body.password) await newUser.save();
     else await newUser.save({ validateBeforeSave: false });
+
+    // Generate verification token
+    const verificationToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const hashedToken = crypto.createHash('sha256').update(verificationToken).digest('hex');
+    newUser.emailVerificationToken = hashedToken;
+    newUser.emailVerificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+    await newUser.save();
+
+    const verificationLink = `http://localhost:3000/api/v1/auth/verify-email/${verificationToken}`;
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('VERIFICATION LINK (dev):', verificationLink);
+    }
+    try {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('Attempting to send verification email via SMTP...', newUser.email);
+      }
+      await sendEmail({
+        to: newUser.email,
+        ...emailTemplates.emailVerification(newUser.username || newUser.name, verificationLink)
+      });
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('Verification email sent via SMTP!');
+      }
+    } catch (err) {
+      console.error('Failed to send verification email via SMTP:', err);
+      await User.findByIdAndDelete(newUser._id); // Remove user if email fails
+      return res.status(500).json({ status: 'error', message: 'There was an error sending the verification email. Please try again later!' });
+    }
+
     res.status(201).json({ success: true, user: { _id: newUser._id, name: newUser.name, phoneNumber: newUser.phoneNumber } });
   } catch (err) {
     res.status(500).json({ status: 'error', message: 'Registration failed', details: err.message });
@@ -267,7 +402,7 @@ router.post('/register', [
 });
 
 // Resend verification email
-router.post('/resend-verification', protect, resendVerificationLimiter, async (req, res, next) => {
+router.post('/resend-verification', protect, rateLimiter.auth, async (req, res, next) => {
   try {
     const user = await User.findById(req.user._id);
     if (!user) return next(new AppError('User not found', 404));
@@ -294,7 +429,7 @@ router.post('/resend-verification', protect, resendVerificationLimiter, async (r
 });
 
 // Verify email
-router.get('/verify-email/:token', verificationLimiter, async (req, res, next) => {
+router.get('/verify-email/:token', rateLimiter.auth, async (req, res, next) => {
   try {
     const hashedToken = crypto.createHash('sha256').update(req.params.token).digest('hex');
     const user = await User.findOne({
@@ -302,18 +437,108 @@ router.get('/verify-email/:token', verificationLimiter, async (req, res, next) =
       emailVerificationTokenExpires: { $gt: Date.now() }
     });
 
-    if (!user) return next(new AppError('Invalid or expired verification token', 400));
+    if (!user) {
+      // Render a user-friendly error page
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html><head><title>Email Verification Failed</title></head>
+        <body style="font-family: Arial, sans-serif; background: #f9f9f9; padding: 30px;">
+          <div style="max-width: 500px; margin: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #eee; padding: 30px;">
+            <h2 style="color: #d32f2f;">Email Verification Failed</h2>
+            <p>The verification link is invalid or has expired.</p>
+            <p>Please request a new verification email or contact support if you need help.</p>
+            <a href="/" style="color: #2d6cdf; text-decoration: underline;">Go to Home</a>
+          </div>
+        </body></html>
+      `);
+    }
 
     user.emailVerified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationTokenExpires = undefined;
     await user.save();
 
-    res.json({ message: 'Email verified successfully' });
+    // Render a user-friendly success page
+    return res.send(`
+      <!DOCTYPE html>
+      <html><head><title>Email Verified</title></head>
+      <body style="font-family: Arial, sans-serif; background: #f9f9f9; padding: 30px;">
+        <div style="max-width: 500px; margin: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #eee; padding: 30px;">
+          <h2 style="color: #2d6cdf;">Email Verified!</h2>
+          <p>Your email has been successfully verified. You can now log in to your account.</p>
+          <a href="/" style="background: #2d6cdf; color: #fff; padding: 12px 24px; border-radius: 5px; text-decoration: none; font-weight: bold;">Go to Home</a>
+        </div>
+      </body></html>
+    `);
   } catch (error) {
     console.error('Error verifying email:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to verify email' });
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html><head><title>Email Verification Error</title></head>
+      <body style="font-family: Arial, sans-serif; background: #f9f9f9; padding: 30px;">
+        <div style="max-width: 500px; margin: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #eee; padding: 30px;">
+          <h2 style="color: #d32f2f;">Server Error</h2>
+          <p>There was an error verifying your email. Please try again later or contact support.</p>
+          <a href="/" style="color: #2d6cdf; text-decoration: underline;">Go to Home</a>
+        </div>
+      </body></html>
+    `);
   }
+});
+
+// Forgot Password (send code)
+router.post('/forgot-password', async (req, res, next) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ status: 'error', message: 'Email is required' });
+  const user = await User.findOne({ email });
+  if (!user) return res.status(200).json({ status: 'success', message: 'If that email exists, a reset code has been sent.' });
+
+  // Generate 6-digit code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const hashedCode = crypto.createHash('sha256').update(code).digest('hex');
+  user.resetPasswordCode = hashedCode;
+  user.resetPasswordExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+  await user.save();
+
+  // Send code via email
+  try {
+    await sendEmail({
+      to: user.email,
+      subject: 'Your Password Reset Code',
+      html: `<div style="font-family: Arial, sans-serif; background: #f9f9f9; padding: 30px;"><div style="max-width: 500px; margin: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #eee; padding: 30px;"><h2 style="color: #2d6cdf;">Password Reset Code</h2><p>Your password reset code is:</p><p style="font-size: 2em; font-weight: bold; letter-spacing: 4px; color: #2d6cdf; text-align: center;">${code}</p><p>This code will expire in 10 minutes.</p><hr><p style="font-size: 12px; color: #888;">If you did not request a password reset, you can safely ignore this email.</p></div></div>`
+    });
+    return res.status(200).json({ status: 'success', message: 'If that email exists, a reset code has been sent.' });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', message: 'Failed to send reset code. Please try again later.' });
+  }
+});
+
+// Reset Password (with code)
+router.post('/reset-password', async (req, res, next) => {
+  const { email, code, password, passwordConfirm } = req.body;
+  if (!email || !code || !password || !passwordConfirm) {
+    return res.status(400).json({ status: 'error', message: 'All fields are required.' });
+  }
+  if (password !== passwordConfirm) {
+    return res.status(400).json({ status: 'error', message: 'Passwords do not match.' });
+  }
+  const user = await User.findOne({ email });
+  if (!user || !user.resetPasswordCode || !user.resetPasswordExpires) {
+    return res.status(400).json({ status: 'error', message: 'Invalid or expired code.' });
+  }
+  if (user.resetPasswordExpires < Date.now()) {
+    return res.status(400).json({ status: 'error', message: 'Reset code has expired.' });
+  }
+  const hashedCode = crypto.createHash('sha256').update(code).digest('hex');
+  if (hashedCode !== user.resetPasswordCode) {
+    return res.status(400).json({ status: 'error', message: 'Invalid reset code.' });
+  }
+  // Update password
+  user.password = await bcrypt.hash(password, 12);
+  user.resetPasswordCode = undefined;
+  user.resetPasswordExpires = undefined;
+  await user.save();
+  return res.status(200).json({ status: 'success', message: 'Password has been reset. You can now log in.' });
 });
 
 // Get user profile
@@ -415,6 +640,106 @@ router.put('/approve-user/:userId', protect, async (req, res, next) => {
   }
 });
 
-// REMOVED: /update-plan endpoint since User model doesn't have plan fields
+// Refresh access token with rotation and reuse detection
+router.post('/refresh-token', rateLimiter.auth, async (req, res, next) => {
+  try {
+    const rt = req.cookies?.refresh_token;
+    if (!rt) {
+      console.error('[Refresh Token] No refresh token provided');
+      return next(new AppError('Refresh token missing', 401));
+    }
+
+    // Validate token format
+    if (typeof rt !== 'string' || rt.trim() === '') {
+      console.error('[Refresh Token] Invalid refresh token format');
+      return next(new AppError('Invalid refresh token format', 401));
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(rt, process.env.JWT_REFRESH_SECRET);
+      if (!payload || !payload.id) {
+        throw new Error('Invalid token payload');
+      }
+    } catch (e) {
+      console.error('[Refresh Token] Token verification failed:', e.message);
+      return next(new AppError('Invalid or expired refresh token', 401));
+    }
+
+    const tokenHash = hashToken(rt);
+    const stored = await RefreshToken.findOne({ tokenHash });
+    
+    if (!stored) {
+      console.error('[Refresh Token] Token not found in database');
+      return next(new AppError('Invalid refresh token', 401));
+    }
+
+    // Reuse detection: token not found or already revoked
+    if (!stored || stored.revokedAt || (stored.expiresAt && stored.expiresAt < new Date())) {
+      // Revoke all tokens for this user as a precaution
+      if (stored?.user) {
+        await RefreshToken.updateMany({ user: stored.user, revokedAt: { $exists: false } }, { $set: { revokedAt: new Date() } });
+      }
+      res.clearCookie('refresh_token');
+      res.clearCookie('jwt');
+      return next(new AppError('Refresh token reuse detected. Please log in again.', 401));
+    }
+
+    const user = await User.findById(payload.id);
+    if (!user) return next(new AppError('User not found', 401));
+
+    // Rotate: revoke old and issue new
+    const newRt = signRefreshToken({ id: user._id });
+    const newRtHash = hashToken(newRt);
+    stored.revokedAt = new Date();
+    stored.replacedBy = newRtHash;
+    await stored.save();
+
+    const newRtDoc = new RefreshToken({
+      user: user._id,
+      tokenHash: newRtHash,
+      expiresAt: new Date(Date.now() + (process.env.REFRESH_TOKEN_MAX_AGE_MS ? parseInt(process.env.REFRESH_TOKEN_MAX_AGE_MS, 10) : 7 * 24 * 60 * 60 * 1000)),
+      userAgent: req.get('User-Agent'),
+      ip: req.ip
+    });
+    await newRtDoc.save();
+
+    const access = signAccessToken(user);
+
+    // Set new cookies
+    const common = {
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+    };
+    res.cookie('jwt', access, { ...common, httpOnly: true, maxAge: 15 * 60 * 1000 });
+    res.cookie('refresh_token', newRt, { ...common, httpOnly: true, maxAge: process.env.REFRESH_TOKEN_MAX_AGE_MS ? parseInt(process.env.REFRESH_TOKEN_MAX_AGE_MS, 10) : 7 * 24 * 60 * 60 * 1000 });
+
+    return res.json({ status: 'success' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Revoke on logout (clear cookies and revoke stored refresh token)
+router.post('/logout', async (req, res, next) => {
+  try {
+    const rt = req.cookies?.refresh_token;
+    if (rt) {
+      const tokenHash = hashToken(rt);
+      await RefreshToken.updateOne({ tokenHash }, { $set: { revokedAt: new Date() } });
+    }
+    const cookieOptions = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+    };
+    res.clearCookie('jwt', cookieOptions);
+    res.clearCookie('refresh_token', cookieOptions);
+    res.clearCookie('XSRF-TOKEN', { httpOnly: false, secure: cookieOptions.secure, sameSite: cookieOptions.sameSite });
+    return res.status(200).json({ status: 'success', message: 'Logged out' });
+  } catch (e) {
+    return res.status(200).json({ status: 'success', message: 'Logged out' });
+  }
+});
 
 export default router;

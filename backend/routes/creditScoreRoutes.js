@@ -182,14 +182,14 @@ router.get('/:userId', protect, requireValidConsent, catchAsync(async (req, res,
   // Audit log: score view
   if (req.user && req.user.id !== userId) {
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'SCORE_VIEW',
-      targetUserId: userId,
       details: {
-        viewedBy: req.user.id,
+        targetUserId: userId,
         viewedAt: new Date()
       },
-      timestamp: new Date()
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
   }
 }));
@@ -333,23 +333,18 @@ router.get('/decision/:phone', async (req, res) => {
 router.post('/score/simulate', (req, res) => {
   try {
     const { paymentHistory, utilization, income, debt } = req.body;
-    // Build minimal scoreData and userData
-    const scoreData = {
-      score: 300 + paymentHistory * 300 + (1 - utilization) * 250, // Example logic, replace with real scoring if needed
-      classification: 'Simulated',
-      breakdown: {
-        componentRatings: {
-          paymentHistory: { label: 'Good', value: paymentHistory * 100 },
-          creditUtilization: { value: utilization * 100 }
-        }
-      }
-    };
-    const userData = {
-      monthlyIncome: income || 5000,
-      totalDebt: debt || 1000
-    };
-    const decision = evaluateLendingDecision(scoreData, userData);
-    res.json({ score: decision.score, dti: decision.dti });
+    
+    // Check if user has real credit data to base simulation on
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required for score simulation' });
+    }
+    
+    // TODO: Implement real score simulation based on actual credit data
+    // For now, return error indicating simulation is not available
+    res.status(501).json({ 
+      error: 'Score simulation not yet implemented',
+      message: 'Please upload your credit data to enable score simulation features'
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -358,11 +353,16 @@ router.post('/score/simulate', (req, res) => {
 // Loan eligibility checker
 router.post('/loan/eligibility', (req, res) => {
   try {
-    const { score, income, debt } = req.body;
-    const userData = { monthlyIncome: income, totalDebt: debt };
-    const scoreData = { score };
-    const decision = evaluateLendingDecision(scoreData, userData);
-    res.json({ eligible: decision.decision === 'Approve', dti: decision.dti, reasons: decision.reasons, riskTier: decision.riskTier });
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required for eligibility check' });
+    }
+    
+    // TODO: Implement real eligibility check based on user's actual credit data
+    // For now, return error indicating service is not available
+    res.status(501).json({ 
+      error: 'Eligibility check not yet implemented',
+      message: 'Please upload your credit data to enable eligibility checking'
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -371,11 +371,16 @@ router.post('/loan/eligibility', (req, res) => {
 // Offer simulator
 router.post('/loan/offer', (req, res) => {
   try {
-    const { score, income, collateral } = req.body;
-    const userData = { monthlyIncome: income, totalDebt: 0, collateralValue: collateral };
-    const scoreData = { score };
-    const decision = evaluateLendingDecision(scoreData, userData);
-    res.json({ offer: { amount: decision.offer?.maxAmount || 0, rate: decision.offer?.interestRate || null, term: decision.offer?.sampleTerm || null, dti: decision.dti } });
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required for offer simulation' });
+    }
+    
+    // TODO: Implement real offer simulation based on user's actual credit data
+    // For now, return error indicating service is not available
+    res.status(501).json({ 
+      error: 'Offer simulation not yet implemented',
+      message: 'Please upload your credit data to enable offer simulation'
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

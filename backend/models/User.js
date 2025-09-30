@@ -1,7 +1,11 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import validator from 'validator';
+// Simple email validation function
+const isValidEmail = (value) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(value);
+};
 import jwt from 'jsonwebtoken';
 import { getRolePermissions, ROLE_VALUES } from '../constants/roles.js';
 
@@ -26,7 +30,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     unique: true,
     lowercase: true,
-    validate: [validator.isEmail, 'Please provide a valid email'],
+    validate: [isValidEmail, 'Please provide a valid email'],
     required: false
   },
   username: {
@@ -129,7 +133,7 @@ const userSchema = new mongoose.Schema({
   lastLogin: Date,
   status: {
     type: String,
-    enum: ['active', 'suspended', 'deactivated', 'pending'],
+    enum: ['pending', 'active', 'deactivated', 'rejected'],
     default: 'pending'
   },
   profile: {
@@ -327,6 +331,9 @@ const userSchema = new mongoose.Schema({
     timestamp: Date
   },
   riskFlags: [{ type: String }],
+  verificationToken: { type: String },
+  verificationTokenExpires: { type: Date },
+  isVerified: { type: Boolean, default: false },
 }, {
   timestamps: true,
   toJSON: { virtuals: true },

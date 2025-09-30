@@ -283,12 +283,64 @@ const UserApproval = () => {
         </CardContent>
       </Card>
 
-      {/* Users Table */}
+      {/* Users Table - Desktop Only */}
       <Card>
         <CardHeader>
           <CardTitle>Pending Users ({filteredUsers.length})</CardTitle>
         </CardHeader>
         <CardContent>
+          {/* Mobile Card List */}
+          <div className="block md:hidden space-y-3 w-full overflow-x-auto">
+            {filteredUsers.map((user) => (
+              <div 
+                key={user._id} 
+                className="bg-white dark:bg-[#0d261c] rounded-xl shadow border border-gray-200 dark:border-[#1a4a38] p-3 flex flex-col gap-2 w-full"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="bg-gradient-to-br from-[#8bc34a] to-[#4caf50] text-white h-8 w-8 rounded-full flex items-center justify-center shadow-sm">
+                      <User className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <div className="font-medium text-gray-900 dark:text-white text-sm">{user.name || 'N/A'}</div>
+                      <div className="text-xs text-gray-600 dark:text-[#a8d5ba] max-w-full break-all">{user.email}</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button size="icon" variant="ghost" onClick={() => handleViewDetails(user)} aria-label="View details">
+                      <Eye className="h-4 w-4 text-blue-500" />
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => approveUser(user._id, true, 'user')} disabled={approving[user._id]} aria-label="Approve">
+                      {approving[user._id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4 text-green-600" />}
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => approveUser(user._id, true, 'lender')} disabled={approving[user._id]} aria-label="Approve as lender">
+                      {approving[user._id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4 text-blue-500" />}
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => approveUser(user._id, false, 'user')} disabled={approving[user._id]} aria-label="Reject">
+                      {approving[user._id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4 text-red-600" />}
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 items-center text-xs mt-1">
+                  <Badge className="bg-yellow-100 text-yellow-800"><Clock className="h-3 w-3 mr-1" />Pending</Badge>
+                  {user.emailVerified ? (
+                    <Badge className="bg-green-100 text-green-800">Email Verified</Badge>
+                  ) : (
+                    <Badge className="bg-yellow-100 text-yellow-800">Email Pending</Badge>
+                  )}
+                  <span className="text-gray-500 dark:text-[#a8d5ba] text-xs ml-auto">{formatDate(user.createdAt)}</span>
+                </div>
+                <div className="flex flex-col gap-1 text-xs text-gray-600 dark:text-[#a8d5ba] mt-1">
+                  <span><Mail className="inline h-3 w-3 mr-1 text-gray-400" />{user.email}</span>
+                  <span><Phone className="inline h-3 w-3 mr-1 text-gray-400" />{user.profile?.phone || 'N/A'}</span>
+                  <span><DollarSign className="inline h-3 w-3 mr-1 text-gray-400" />Income: {user.monthlyIncome ? `$${user.monthlyIncome.toLocaleString()}` : 'N/A'}</span>
+                  <span><Building className="inline h-3 w-3 mr-1 text-gray-400" />{user.profile?.employmentStatus || 'N/A'}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Desktop Table - Hidden on mobile */}
+          <div className="hidden md:block">
           {loading ? (
             <div className="flex justify-center py-8">
               <Loader2 className="h-8 w-8 animate-spin" />
@@ -434,6 +486,7 @@ const UserApproval = () => {
               </TableBody>
             </Table>
           )}
+          </div>
         </CardContent>
       </Card>
 

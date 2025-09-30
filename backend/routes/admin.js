@@ -17,11 +17,33 @@ import { calculateCreditScore } from '../utils/creditScoring.js';
 import { evaluateLendingDecision } from '../utils/lendingDecision.js';
 import mongoose from 'mongoose';
 import logger from '../utils/logger.js';
-import { sendEmail } from '../utils/email.js';
+import { sendEmail } from '../config/email.js';
 import { sendSMS } from '../utils/sms.js';
 import jwt from 'jsonwebtoken';
 
 const router = express.Router();
+
+// Path validation function to prevent path traversal
+const validateAndSanitizePath = (filePath, allowedDir) => {
+  // Resolve the path to get absolute path
+  const resolvedPath = path.resolve(filePath);
+  const allowedDirResolved = path.resolve(allowedDir);
+  
+  // Check if the resolved path is within the allowed directory
+  if (!resolvedPath.startsWith(allowedDirResolved)) {
+    throw new Error('Path traversal detected');
+  }
+  
+  // Normalize the path to remove any .. or . segments
+  const normalizedPath = path.normalize(resolvedPath);
+  
+  // Double-check the normalized path is still within allowed directory
+  if (!normalizedPath.startsWith(allowedDirResolved)) {
+    throw new Error('Path traversal detected after normalization');
+  }
+  
+  return normalizedPath;
+};
 
 /**
  * @route   GET /admin/credit-reports
@@ -469,11 +491,15 @@ router.patch('/users/:userId/status', auth, requireAdmin, async (req, res) => {
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'CHANGE_USER_STATUS',
-      targetUserId: userId,
-      details: `Changed user status to: ${status}`,
-      reason: reason || 'Admin action'
+      details: {
+        targetUserId: userId,
+        status: status,
+        reason: reason || 'Admin action'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     const user = await User.findByIdAndUpdate(
@@ -565,11 +591,14 @@ router.post('/users/:userId/reset-password', auth, requireAdmin, async (req, res
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'RESET_USER_PASSWORD',
-      targetUserId: userId,
-      details: 'Password reset by admin',
-      reason: reason || 'Admin action'
+      details: {
+        targetUserId: userId,
+        reason: reason || 'Admin action'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     res.json({ success: true, message: 'Password reset successfully' });
@@ -593,11 +622,15 @@ router.post('/users/:userId/impersonate', auth, requireAdmin, async (req, res) =
 
     // Log the impersonation
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'IMPERSONATE_USER',
-      targetUserId: userId,
-      details: `Admin ${req.user.email} impersonated user ${targetUser.email}`,
-      reason: reason || 'Support debugging'
+      details: {
+        targetUserId: userId,
+        targetUserEmail: targetUser.email,
+        reason: reason || 'Support debugging'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     // Generate impersonation token
@@ -642,7 +675,10 @@ router.get('/security-logs', auth, requireAdmin, async (req, res) => {
       }
 
       // Create temporary file for decompressed content
-      const tempFile = path.join(process.cwd(), 'temp', `temp-${Date.now()}.log`);
+      const tempFile = validateAndSanitizePath(
+        path.join(process.cwd(), 'temp', `temp-${Date.now()}.log`),
+        process.cwd()
+      );
       await fs.mkdir(path.dirname(tempFile), { recursive: true });
 
       // Decompress the file
@@ -667,7 +703,10 @@ router.get('/security-logs', auth, requireAdmin, async (req, res) => {
       res.json(logs);
     } else {
       // Fetch from local filesystem
-      const logFile = path.join('logs', `security-${date}.log`);
+      const logFile = validateAndSanitizePath(
+        path.join('logs', `security-${date}.log`),
+        process.cwd()
+      );
       try {
         const content = await fs.readFile(logFile, 'utf-8');
         const logs = content
@@ -695,7 +734,10 @@ router.get('/security-logs', auth, requireAdmin, async (req, res) => {
 router.get('/security-stats', auth, requireAdmin, async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    const logFile = path.join('logs', `security-${today}.log`);
+    const logFile = validateAndSanitizePath(
+      path.join('logs', `security-${today}.log`),
+      process.cwd()
+    );
     
     try {
       const content = await fs.readFile(logFile, 'utf-8');
@@ -965,11 +1007,15 @@ router.put('/users/:userId', auth, async (req, res) => {
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'UPDATE_USER',
-      targetUserId: userId,
-      details: `Updated user profile: ${Object.keys(updateData).join(', ')}`,
-      reason: req.body.reason || 'Admin update'
+      details: {
+        targetUserId: userId,
+        updatedFields: Object.keys(updateData),
+        reason: req.body.reason || 'Admin update'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     const user = await User.findByIdAndUpdate(
@@ -1006,11 +1052,14 @@ router.delete('/users/:userId', auth, async (req, res) => {
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'DELETE_USER',
-      targetUserId: userId,
-      details: 'User account deleted',
-      reason: reason || 'Admin action'
+      details: {
+        targetUserId: userId,
+        reason: reason || 'Admin action'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     await User.findByIdAndDelete(userId);
@@ -1157,11 +1206,16 @@ router.post('/credit-reports/:userId/recalculate', auth, async (req, res) => {
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'RECALCULATE_CREDIT_SCORE',
-      targetUserId: userId,
-      details: `Score recalculated from ${creditReport.creditScore.fico.score} to ${newScore.score}`,
-      reason: reason || 'Admin request'
+      details: {
+        targetUserId: userId,
+        oldScore: creditReport.creditScore.fico.score,
+        newScore: newScore.score,
+        reason: reason || 'Admin request'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     res.json({
@@ -1215,11 +1269,16 @@ router.post('/credit-reports/:userId/annotate', auth, async (req, res) => {
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'ANNOTATE_CREDIT_SCORE',
-      targetUserId: userId,
-      details: `Added annotation: ${annotation}`,
-      reason: reason || 'Admin annotation'
+      details: {
+        targetUserId: userId,
+        annotation: annotation,
+        flagType: flagType || 'info',
+        reason: reason || 'Admin annotation'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     res.json({ success: true, data: creditReport.annotations });
@@ -1379,11 +1438,15 @@ router.put('/credit-reports/:userId/override', auth, async (req, res) => {
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'OVERRIDE_CREDIT_DATA',
-      targetUserId: userId,
-      details: `Overridden fields: ${Object.keys(overrides).join(', ')}`,
-      reason: reason || 'Admin override'
+      details: {
+        targetUserId: userId,
+        overriddenFields: Object.keys(overrides),
+        reason: reason || 'Admin override'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     res.json({ success: true, data: creditReport });
@@ -1431,11 +1494,15 @@ router.put('/credit-reports/:userId/override-decision', auth, async (req, res) =
 
     // Log the action
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'OVERRIDE_LENDING_DECISION',
-      targetUserId: userId,
-      details: `Decision overridden to: ${decision}`,
-      reason: reason || 'Admin override'
+      details: {
+        targetUserId: userId,
+        decision: decision,
+        reason: reason || 'Admin override'
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
     });
 
     res.json({ success: true, data: creditReport.lendingDecision });
@@ -1947,11 +2014,12 @@ router.post('/system/restart/:service', auth, requireAdmin, async (req, res) => 
     
     // Log the restart action
     await SecurityLog.create({
-      action: `Service restart requested`,
-      description: `Admin requested restart of ${service} service`,
-      severity: 'info',
-      service: service,
-      userId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
+      action: `SERVICE_RESTART`,
+      details: {
+        service: service,
+        description: `Admin requested restart of ${service} service`
+      },
       ipAddress: req.ip,
       userAgent: req.get('User-Agent')
     });
@@ -1998,5 +2066,8 @@ router.get('/audit-logs/:adminId', auth, requireAdmin, async (req, res) => {
     res.status(500).json({ status: 'error', message: 'Failed to fetch audit logs' });
   }
 });
+
+// Path validation function to prevent path traversal
+
 
 export default router; 

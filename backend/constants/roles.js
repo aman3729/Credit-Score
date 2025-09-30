@@ -15,15 +15,25 @@ export const ROLES = {
     label: 'Lender',
     permissions: ['view_applicants', 'bulk_score_check', 'lender_dashboard']
   },
-  ADMIN: {
-    value: 'admin',
-    label: 'Administrator',
-    permissions: ['manage_users', 'system_config', 'audit_logs', 'override_scores']
+  UNDERWRITER: {
+    value: 'underwriter',
+    label: 'Underwriter',
+    permissions: ['manual_reviews', 'fraud_detection', 'score_adjustments', 'lending_config']
+  },
+  MANAGER: {
+    value: 'manager',
+    label: 'Manager',
+    permissions: ['view_applicants', 'bulk_score_check', 'lender_dashboard', 'view_config']
   },
   ANALYST: {
     value: 'analyst',
     label: 'Credit Analyst',
-    permissions: ['manual_reviews', 'fraud_detection', 'score_adjustments']
+    permissions: ['manual_reviews', 'fraud_detection', 'score_adjustments', 'view_config']
+  },
+  ADMIN: {
+    value: 'admin',
+    label: 'Administrator',
+    permissions: ['manage_users', 'system_config', 'audit_logs', 'override_scores', 'manage_banks']
   }
 };
 

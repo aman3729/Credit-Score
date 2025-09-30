@@ -4,7 +4,7 @@ import { promisify } from 'util';
 import userService from '../services/userService.js';
 import AppError from '../utils/appError.js';
 import catchAsync from '../utils/catchAsync.js';
-import { sendWelcomeEmail, sendEmailVerificationEmail, sendPasswordResetEmail } from '../utils/email.js';
+import { sendWelcomeEmail, sendEmailVerificationEmail, sendPasswordResetEmail, sendVerificationEmail } from '../config/email.js';
 import { logger, securityLogger } from '../config/logger.js';
 import bcrypt from 'bcryptjs';
 
@@ -46,16 +46,19 @@ const createSendToken = (user, statusCode, req, res) => {
 
 // User signup
 const signup = catchAsync(async (req, res, next) => {
-  console.log('Signup request body:', req.body);
+  console.log('REGISTER CONTROLLER HIT');
+  console.log('Step 1: Received registration request:', req.body.email);
   
   // 1) Check if user already exists
   const existingUser = await userService.findByEmail(req.body.email);
   if (existingUser) {
+    console.log('Step 1a: Email already in use');
     return next(new AppError('Email already in use', 400));
   }
   
   const existingUsername = await userService.findByUsername(req.body.username);
   if (existingUsername) {
+    console.log('Step 1b: Username already in use');
     return next(new AppError('Username already in use', 400));
   }
 
@@ -66,13 +69,12 @@ const signup = catchAsync(async (req, res, next) => {
     'SHABELLE', 'SIINQEE', 'TSEHAY', 'AMHARA', 'AHADU', 'GOH', 'AMAN'
   ];
   if (!req.body.bankId || typeof req.body.bankId !== 'string' || !validBankIds.includes(req.body.bankId)) {
-    console.error('[Signup] Invalid or missing bankId:', req.body.bankId, 'Payload:', req.body);
+    console.log('Step 1c: Invalid or missing bankId');
     return next(new AppError('A valid bankId is required for registration', 400));
   }
 
-  // Log for debugging
-  console.log('[Signup] About to call userService.create with:', req.body);
   // 2) Hash password
+  console.log('Step 2: Hashing password');
   const hashedPassword = await bcrypt.hash(req.body.password, 12);
 
   // 3) Create new user
@@ -88,45 +90,58 @@ const signup = catchAsync(async (req, res, next) => {
       emailVerified: false,
       createdAt: new Date(),
       updatedAt: new Date(),
-      bankId: req.body.bankId // <-- Ensure this is present
-      // Add any other required fields here
+      bankId: req.body.bankId
     });
-    console.log('[Signup] userService.create succeeded:', newUser);
+    console.log('Step 3: User created:', newUser.email);
   } catch (error) {
-    console.error('[Signup] User creation error:', error, 'Payload:', req.body);
+    console.log('Step 3a: User creation error:', error.message);
     return next(new AppError(error.message, 400));
   }
 
-  // 4) Generate email verification token
+  // After user is created in registration:
   const verificationToken = crypto.randomBytes(32).toString('hex');
-  const emailVerificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
-
+  newUser.verificationToken = verificationToken;
+  newUser.verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
   await userService.updateById(newUser._id, {
-    emailVerificationToken: verificationToken,
-    emailVerificationTokenExpires
+    verificationToken: verificationToken,
+    verificationTokenExpires: newUser.verificationTokenExpires
   });
+  console.log('Step 4: Verification token generated');
+
+  const verificationLink = `http://localhost:5177/verify-email?token=${verificationToken}`;
+  try {
+    console.log('Step 5: Attempting to send verification email via EmailJS...', newUser.email, verificationLink);
+    await sendVerificationEmail(newUser.email, verificationLink);
+    console.log('Step 5a: Verification email sent via EmailJS!');
+  } catch (err) {
+    console.log('Step 5b: Failed to send verification email via EmailJS:', err.message);
+    await userService.updateById(newUser._id, { status: 'deactivated' });
+    return next(
+      new AppError('There was an error sending the email. Please try again later!', 500)
+    );
+  }
 
   try {
     // 5) Send welcome email with verification link
     const verificationURL = `${req.protocol}://${req.get('host')}/api/v1/auth/verify-email/${verificationToken}`;
-    
+    console.log('Step 6: Attempting to send welcome email');
     await sendWelcomeEmail({
       name: newUser.name,
       email: newUser.email,
       verificationURL,
     });
-    
+    console.log('Step 6a: Welcome email sent');
     // 6) Log the signup
     securityLogger.info('New user signed up', {
       userId: newUser._id,
       email: newUser.email,
       ip: req.ip,
     });
-    
     // 7) Send response
+    console.log('Step 7: Sending success response');
     createSendToken(newUser, 201, req, res);
   } catch (err) {
-    // If email sending fails, remove the user and pass the error
+    console.log('Step 6b: Failed to send welcome email:', err.message);
     await userService.updateById(newUser._id, { status: 'deactivated' });
     return next(
       new AppError('There was an error sending the email. Please try again later!', 500)
@@ -378,7 +393,7 @@ const updatePassword = catchAsync(async (req, res, next) => {
 // Verify email
 const verifyEmail = catchAsync(async (req, res, next) => {
   // 1) Get user based on the token
-  const verificationToken = req.params.token;
+  const verificationToken = req.query.token;
 
   const user = await userService.findByEmailVerificationToken(verificationToken);
 
@@ -435,11 +450,7 @@ const resendVerificationEmail = catchAsync(async (req, res, next) => {
     // 4) Send verification email
     const verificationURL = `${req.protocol}://${req.get('host')}/api/v1/auth/verify-email/${verificationToken}`;
     
-    await sendEmailVerificationEmail({
-      name: user.name,
-      email: user.email,
-      verificationURL,
-    });
+    await sendVerificationEmail(user.email, verificationURL);
     
     // 5) Log the email resend
     securityLogger.info('Verification email resent', {

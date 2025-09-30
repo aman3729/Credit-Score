@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import { logger } from './logger.js';
+import axios from 'axios';
 
 // Determine email transport mode. Use JSON for development if no SMTP host is set.
 const isJsonTransport = process.env.NODE_ENV !== 'production' && !process.env.SMTP_HOST;
@@ -108,8 +109,65 @@ export const emailTemplates = {
     html: `<h1>Subscription Expired</h1><p>Hello ${username}, your ${plan} plan has expired. Please renew to continue service.</p>`,
   }),
 
-  emailVerification: (username, token) => ({
-    subject: 'Verify Your Email Address',
-    html: `<h1>Verify Your Email</h1><p>Click to verify: <a href="${process.env.FRONTEND_URL}/verify-email?token=${token}">Verify Email</a></p>`,
-  }),
+  emailVerification: (username, tokenOrLink) => {
+    // If tokenOrLink looks like a URL, use it directly; otherwise, build the URL
+    const verification_link = tokenOrLink.startsWith('http')
+      ? tokenOrLink
+      : `${process.env.FRONTEND_URL || 'http://localhost:5177'}/verify-email/${tokenOrLink}`;
+    return {
+      subject: 'Verify Your Email Address',
+      html: `<!DOCTYPE html>
+<html>
+  <body style="font-family: Arial, sans-serif; background: #f9f9f9; padding: 30px;">
+    <div style="max-width: 500px; margin: auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #eee; padding: 30px;">
+      <h2 style="color: #2d6cdf;">Welcome to AMAN!</h2>
+      <p>Hi${username ? `, ${username}` : ''},</p>
+      <p>Thank you for registering. To complete your registration, please verify your email address by clicking the button below:</p>
+      <p style="text-align: center;">
+        <a href="${verification_link}" style="background: #2d6cdf; color: #fff; padding: 12px 24px; border-radius: 5px; text-decoration: none; font-weight: bold;">Verify Email</a>
+      </p>
+      <p>If the button above does not work, copy and paste the following link into your browser:</p>
+      <p style="word-break: break-all;"><a href="${verification_link}">${verification_link}</a></p>
+      <hr>
+      <p style="font-size: 12px; color: #888;">If you did not create an account, you can safely ignore this email.</p>
+      <p style="font-size: 12px; color: #888;">&copy; 2025 AMAN SCORE</p>
+    </div>
+  </body>
+</html>`
+    };
+  },
+}; 
+
+export const publicKey = 'X9yM769rq-ocAWraV';
+export const privateKey = 'LVfY96Y_bqpAvnwWYWoHX';
+export const serviceId = 'service_wu9foxz';
+export const templateId = 'template_rg1vfhm'; 
+
+export const sendCreditScoreUpdateEmail = async ({ name, email, score, previousScore, change }) => {
+  return sendEmail({
+    to: email,
+    ...emailTemplates.scoreUpdate(name, score),
+    html: `<h1>Credit Score Update</h1>
+      <p>Hello ${name},</p>
+      <p>Your credit score has been updated.</p>
+      <p><strong>Previous Score:</strong> ${previousScore}</p>
+      <p><strong>New Score:</strong> ${score}</p>
+      <p><strong>Change:</strong> ${change > 0 ? '+' : ''}${change}</p>
+      <p>Visit your dashboard for more details.</p>`
+  });
+}; 
+
+export const sendVerificationEmail = async (to, verificationLink) => {
+  const templateParams = {
+    to_email: to,
+    verification_link: verificationLink,
+  };
+
+  await axios.post('https://api.emailjs.com/api/v1.0/email/send', {
+    service_id: process.env.EMAILJS_SERVICE_ID,
+    template_id: process.env.EMAILJS_TEMPLATE_ID,
+    user_id: process.env.EMAILJS_PUBLIC_KEY,
+    accessToken: process.env.EMAILJS_PRIVATE_KEY,
+    template_params: templateParams,
+  });
 }; 

@@ -11,7 +11,7 @@ import {
   Lightbulb
 } from 'lucide-react';
 
-const PremiumInsights = ({ creditData, scoreImprovement }) => {
+const PremiumInsights = ({ creditData, scoreImprovement = { change: 0 } }) => {
   const currentScore = creditData?.creditScore || creditData?.currentScore || 0;
   const factors = creditData?.creditHistory?.[0]?.factors || {};
 
@@ -19,24 +19,26 @@ const PremiumInsights = ({ creditData, scoreImprovement }) => {
     const insights = [];
 
     // Score trend insight
-    if (scoreImprovement.change > 0) {
-      insights.push({
-        id: 1,
-        type: 'positive',
-        title: 'Score Momentum',
-        description: `Your score has been improving steadily. At this rate, you could reach ${Math.min(850, currentScore + 50)} within 3-6 months.`,
-        impact: 'High',
-        icon: TrendingUp
-      });
-    } else if (scoreImprovement.change < 0) {
-      insights.push({
-        id: 1,
-        type: 'warning',
-        title: 'Score Decline',
-        description: 'Your score has decreased. Focus on payment history and credit utilization to reverse this trend.',
-        impact: 'High',
-        icon: TrendingUp
-      });
+    if (scoreImprovement && typeof scoreImprovement.change === 'number') {
+      if (scoreImprovement.change > 0) {
+        insights.push({
+          id: 1,
+          type: 'positive',
+          title: 'Score Momentum',
+          description: `Your score has been improving steadily. At this rate, you could reach ${Math.min(850, currentScore + 50)} within 3-6 months.`,
+          impact: 'High',
+          icon: TrendingUp
+        });
+      } else if (scoreImprovement.change < 0) {
+        insights.push({
+          id: 1,
+          type: 'warning',
+          title: 'Score Decline',
+          description: 'Your score has decreased. Focus on payment history and credit utilization to reverse this trend.',
+          impact: 'High',
+          icon: TrendingUp
+        });
+      }
     }
 
     // Payment history insight

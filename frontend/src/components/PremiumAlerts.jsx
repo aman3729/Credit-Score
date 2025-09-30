@@ -74,7 +74,7 @@ const PremiumAlerts = ({ user }) => {
       id: 3,
       type: 'warning',
       title: 'Payment Due Soon',
-      description: 'Credit card payment of $1,250 is due in 3 days. Consider setting up automatic payments.',
+      description: 'Credit card payment is due soon. Consider setting up automatic payments.',
       time: '2 days ago',
       priority: 'high',
       read: true,

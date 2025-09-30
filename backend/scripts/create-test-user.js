@@ -1,75 +1,65 @@
 import mongoose from 'mongoose';
+import User from '../models/User.js';
+import bcrypt from 'bcryptjs';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import bcrypt from 'bcryptjs';
-import User from '../models/User.js';
 
 // Load environment variables
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
-// Connect to MongoDB
-const connectDB = async () => {
-  try {
-    if (!process.env.MONGODB_URI) {
-      throw new Error('MONGODB_URI is not defined in environment variables');
-    }
-    
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-    console.log('MongoDB Connected');
-  } catch (error) {
-    console.error('MongoDB connection error:', error);
-    process.exit(1);
-  }
-};
-
-// Create a test user
 const createTestUser = async () => {
   try {
+    // Connect to MongoDB
+    const MONGO_URI = process.env.MONGODB_URI || process.env.MONGO_URI;
+    
+    if (!MONGO_URI) {
+      console.error('❌ MONGODB_URI or MONGO_URI environment variable is required');
+      process.exit(1);
+    }
+    
+    await mongoose.connect(MONGO_URI);
+    console.log('✅ Connected to MongoDB');
+
     // Check if test user already exists
-    const existingUser = await User.findOne({ email: 'test@example.com' });
+    const existingUser = await User.findOne({ email: process.env.TEST_USER_EMAIL || 'test@example.com' });
     
     if (existingUser) {
-      console.log('Test user already exists:', {
-        email: 'test@example.com',
-        id: existingUser._id
-      });
+      console.log('⚠️  Test user already exists');
+      console.log('📧 Email:', existingUser.email);
+      console.log('🆔 ID:', existingUser._id);
       return;
     }
 
-    // Create new test user
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash('password123', salt);
-    
-    const user = new User({
-      username: 'testuser',
-      email: 'test@example.com',
+    // Generate secure random password if not provided
+    const testPassword = process.env.TEST_USER_PASSWORD || Math.random().toString(36).slice(-12) + '!A1';
+    const salt = await bcrypt.genSalt(12);
+    const hashedPassword = await bcrypt.hash(testPassword, salt);
+
+    // Create test user
+    const testUser = new User({
+      name: 'Test User',
+      email: process.env.TEST_USER_EMAIL || 'test@example.com',
       password: hashedPassword,
-      emailVerified: true,
-      role: 'user'
+      role: 'user',
+      status: 'active',
+      emailVerified: true
     });
 
-    await user.save();
-    console.log('Test user created successfully:', {
-      email: 'test@example.com',
-      password: 'password123'
-    });
+    await testUser.save();
+    console.log('✅ Test user created successfully');
+    console.log('📧 Email:', testUser.email);
+    console.log('🔑 Password:', testPassword);
+    console.log('🆔 ID:', testUser._id);
+
   } catch (error) {
-    console.error('Error creating test user:', error);
+    console.error('❌ Error creating test user:', error);
   } finally {
     await mongoose.disconnect();
-    console.log('MongoDB Disconnected');
+    console.log('🔌 Disconnected from MongoDB');
   }
 };
 
-// Run the script
-(async () => {
-  await connectDB();
-  await createTestUser();
-  process.exit(0);
-})();
+createTestUser();

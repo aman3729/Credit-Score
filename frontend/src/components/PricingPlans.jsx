@@ -48,13 +48,12 @@ const PricingPlans = ({ onSelectPlan }) => {
       setProcessing(true);
       setError(null);
 
-      const token = localStorage.getItem('token');
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/payments/initiate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
         },
+        credentials: 'include',
         body: JSON.stringify({
           plan,
           billingCycle,
@@ -72,10 +71,9 @@ const PricingPlans = ({ onSelectPlan }) => {
       const paymentId = data.paymentId;
       const pollInterval = setInterval(async () => {
         const statusResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/payments/status/${paymentId}`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+          credentials: 'include'
         });
+
         const statusData = await statusResponse.json();
 
         if (statusData.status === 'completed') {

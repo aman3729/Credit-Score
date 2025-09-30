@@ -1,4 +1,3 @@
-// src/components/AdminDashboard.jsx
 import React, { useState, useEffect, useCallback, useRef, Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
@@ -8,7 +7,8 @@ import {
   CheckCircle2, XCircle, Clock, ChevronDown, ChevronUp, ChevronLeft, 
   ChevronRight, Loader2, RefreshCw, BarChart2, Plus, TrendingUp,
   Shield, Lock, Flag, BarChart, Database, Sliders, Code, ClipboardList,
-  MessageSquare, Server, Eye, Edit, Trash2, Send, Key, Filter, List
+  MessageSquare, Server, Eye, Edit, Trash2, Send, Key, Filter, List,
+  Menu, X
 } from 'lucide-react';
 
 // UI Components
@@ -24,13 +24,12 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator
 } from "./ui/dropdown-menu";
-import { TooltipProvider } from './ui/tooltip';
+import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from './ui/tooltip';
 
 // Custom Components
 import RegisterUser from './admin/RegisterUser';
-import AdminBatchUpload from './AdminBatchUpload';
+const AdminBatchUpload = React.lazy(() => import('./AdminBatchUpload'));
 import UploadHistory from './admin/UploadHistory';
-import AuditLogs from './admin/AuditLogs';
 import RoleManagement from './admin/RoleManagement';
 import NotificationCenter from './admin/NotificationCenter';
 import FraudDetectionPanel from './admin/FraudDetectionPanel';
@@ -43,6 +42,9 @@ import SchemaMappingEngine from './admin/SchemaMappingEngine';
 import { useAuth } from '../contexts/AuthContext';
 import { api, fetchAdminStats } from '../lib/api';
 import LenderAccessHistoryPanel from './LenderAccessHistoryPanel';
+import DecisionConfigPanel from './AdminDashboard/DecisionConfigPanel';
+import BatchUploadDialog from './LenderDashboard/dialogs/BatchUploadDialog';
+import BatchUploadResults from './LenderDashboard/BatchUploadResults';
 
 const UserManagementPanel = lazy(() => import('./admin/UserManagementPanel'));
 const LendingDecisionsPanel = lazy(() => import('./admin/LendingDecisionsPanel'));
@@ -50,14 +52,14 @@ const CreditOversightPanel = lazy(() => import('./admin/CreditOversightPanel'));
 const AnalyticsPanel = lazy(() => import('./admin/AnalyticsPanel'));
 const SupportCenterPanel = lazy(() => import('./admin/SupportCenterPanel'));
 
-// Primary color and complementary palette
+// Color palette
 const PRIMARY_COLOR = '#0d261c';
 const PRIMARY_LIGHT = '#1a4a38';
 const SECONDARY_COLOR = '#8bc34a';
 const ACCENT_COLOR = '#ffd54f';
 const LIGHT_BG = '#f0f7f4';
 const DARK_BG = '#0a1d15';
-const MATTE_BLACK = '#18191a';
+const MATTE_BLACK = '#0a0a0a';
 
 const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
   const navigate = useNavigate();
@@ -71,7 +73,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [showRegisterUser, setShowRegisterUser] = useState(false);
-  const [showBatchUpload, setShowBatchUpload] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 10,
@@ -97,20 +99,21 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
   const [adminList, setAdminList] = useState([]);
   const [selectedAdmin, setSelectedAdmin] = useState(null);
   const [adminLogs, setAdminLogs] = useState([]);
+  const [showBatchUpload, setShowBatchUpload] = useState(false);
+  const [batchResults, setBatchResults] = useState(null);
   const [adminLogsLoading, setAdminLogsLoading] = useState(false);
-
-  // Group lending decisions by applicant (user)
   const [groupedLendingDecisions, setGroupedLendingDecisions] = useState([]);
   const [selectedUserDecisions, setSelectedUserDecisions] = useState(null);
 
   // Navigation structure
   const navSections = [
-    { id: 'dashboard', title: 'Dashboard', icon: <BarChart className="h-5 w-5 mr-3" />, color: SECONDARY_COLOR },
+    { id: 'dashboard', title: 'Dashboard', icon: <BarChart2 className="h-5 w-5 mr-3" />, color: SECONDARY_COLOR },
     { id: 'user-management', title: 'User Management', icon: <Users className="h-5 w-5 mr-3" />, color: '#4caf50' },
     { id: 'user-approval', title: 'User Approval', icon: <Clock className="h-5 w-5 mr-3" />, color: '#ff9800' },
     { id: 'credit-oversight', title: 'Credit Oversight', icon: <CreditCard className="h-5 w-5 mr-3" />, color: '#2196f3' },
     { id: 'batch-uploads', title: 'Batch Uploads', icon: <Upload className="h-5 w-5 mr-3" />, color: '#ff9800' },
     { id: 'lending-decisions', title: 'Lending Decisions', icon: <ClipboardList className="h-5 w-5 mr-3" />, color: '#9c27b0' },
+    { id: 'decision-config', title: 'Decision Config', icon: <Settings className="h-5 w-5 mr-3" />, color: '#ff6b35' },
     { id: 'data-tools', title: 'Data Tools', icon: <Database className="h-5 w-5 mr-3" />, color: '#607d8b' },
     { id: 'schema-mapping', title: 'Schema Mapping', icon: <Code className="h-5 w-5 mr-3" />, color: '#8bc34a' },
     { id: 'analytics', title: 'Analytics', icon: <BarChart2 className="h-5 w-5 mr-3" />, color: '#e91e63' },
@@ -125,17 +128,21 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     { id: 'lender-access-history', title: 'Lender Access History', icon: <Eye className="h-5 w-5 mr-3" />, color: '#607d8b' },
   ];
 
-  // Fetch admin stats on mount
+  // Fetch admin stats
   useEffect(() => {
-    fetchAdminStats()
-      .then(data => setStats(data))
-      .catch(error => {
+    const fetchStats = async () => {
+      try {
+        const data = await fetchAdminStats();
+        setStats(data);
+      } catch (error) {
         toast({
           title: 'Failed to load admin stats',
           description: error.message,
           variant: 'error'
         });
-      });
+      }
+    };
+    fetchStats();
   }, [toast]);
 
   // Fetch users
@@ -174,17 +181,12 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     }
   }, [navigate, logout, toast]);
 
-  // Fetch credit reports with filtering
+  // Fetch credit reports
   const fetchCreditReports = useCallback(async (page = 1, search = '', filter = scoreFilter) => {
     try {
       setLoading(true);
       const response = await api.get('/admin/credit-reports', {
-        params: {
-          page,
-          limit: 10,
-          search,
-          filter
-        }
+        params: { page, limit: 10, search, filter }
       });
       setCreditReports(response.data.reports || []);
       setPagination(response.data.pagination || { current: 1, totalPages: 1 });
@@ -194,7 +196,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
         title: 'Error',
         description: 'Failed to fetch credit reports',
         variant: 'destructive',
-        });
+      });
     } finally {
       setLoading(false);
     }
@@ -223,7 +225,6 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     try {
       setLendingLoading(true);
       const response = await api.get('/admin/lending-decisions');
-      // Flatten lending decisions for table display
       const flatDecisions = (response.data.decisions || []).map(decision => ({
         id: decision.id || decision._id,
         applicant: decision.applicant?.name || decision.applicant?.email || decision.applicant || 'Unknown',
@@ -235,23 +236,22 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
         date: decision.date,
         raw: decision
       }));
-      // Group decisions by applicant (using applicant as key)
+      
       const grouped = {};
       flatDecisions.forEach(decision => {
-        // Use applicant email or id if available for uniqueness
         const key = decision.applicant?.email || decision.applicant?.name || decision.applicant || 'Unknown';
         if (!grouped[key]) grouped[key] = [];
         grouped[key].push(decision);
       });
-      // Convert to array for rendering
+      
       const groupedArr = Object.entries(grouped).map(([user, decisions]) => ({
         user,
-        latest: decisions[0], // or sort by date and pick latest
+        latest: decisions[0],
         all: decisions
       }));
+      
       setGroupedLendingDecisions(groupedArr);
-      setLendingDecisions(flatDecisions); // keep flat for details if needed
-      console.log('LENDING DECISIONS (flatDecisions):', flatDecisions);
+      setLendingDecisions(flatDecisions);
     } catch (error) {
       console.error('Error fetching lending decisions:', error);
       toast({
@@ -264,7 +264,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     }
   }, [toast]);
 
-  // Fetch all admins
+  // Fetch admin list
   const fetchAdminList = useCallback(async () => {
     try {
       const response = await api.get('/admin/admin-users');
@@ -274,7 +274,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     }
   }, []);
 
-  // Fetch logs for selected admin
+  // Fetch admin logs
   const fetchAdminLogs = useCallback(async (adminId) => {
     try {
       setAdminLogsLoading(true);
@@ -287,15 +287,13 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     }
   }, []);
 
-  // Only poll for dashboard stats
+  // Data polling
   useEffect(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
-      intervalRef.current = null;
     }
 
     if (activeTab === 'dashboard') {
-      // Set up polling for dashboard stats
       const fetchDashboardStats = async () => {
         if (!isMountedRef.current) return;
         try {
@@ -323,26 +321,28 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
-        intervalRef.current = null;
       }
     };
   }, [activeTab, fetchUsers, fetchCreditReports, fetchAnalytics, fetchLendingDecisions, fetchAdminList]);
 
-  // Component unmount cleanup
+  // Cleanup
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
     };
   }, []);
 
-  // Fetch logs when selected admin changes
+  // Fetch admin logs when selected
   useEffect(() => {
     if (selectedAdmin) {
       fetchAdminLogs(selectedAdmin._id);
     }
   }, [selectedAdmin, fetchAdminLogs]);
 
-  // Handle batch upload completion
+  // Handle batch upload
   const handleUploadComplete = useCallback((uploadData) => {
     if (activeTab === 'user-management') {
       fetchUsers();
@@ -356,11 +356,27 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     });
   }, [activeTab, fetchUsers, fetchCreditReports, toast]);
 
+  // Enhanced batch upload handlers
+  const handleBatchUploadOpen = () => setShowBatchUpload(true);
+  const handleBatchUploadClose = () => setShowBatchUpload(false);
+  const handleBatchUploadComplete = async (results) => {
+    setShowBatchUpload(false);
+    setBatchResults(results);
+    toast({
+      title: 'Batch Upload Complete',
+      description: `Successfully processed ${results?.successCount || 0} users.`,
+      variant: 'success',
+      duration: 5000,
+    });
+    // Refresh data
+    fetchUsers();
+    fetchCreditReports();
+  };
+
   // Handle user actions
   const handleUserAction = useCallback(async (userId, action) => {
     try {
       setLoading(true);
-      
       let endpoint = '';
       let payload = {};
       
@@ -383,9 +399,8 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
           endpoint = `/admin/users/${userId}/reset-password`;
           break;
         case 'impersonate':
-          // API to get impersonation token
-          const response = await api.post(`/admin/users/${userId}/impersonate`);
-          localStorage.setItem('impersonation_token', response.data.token);
+          await api.post(`/admin/users/${userId}/impersonate`);
+          // Server should set an httpOnly cookie; no tokens in localStorage
           navigate('/dashboard');
           return;
         default:
@@ -398,18 +413,13 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
         await api.post(endpoint, payload);
       }
       
-      if (action === 'verify') {
-        toast({
-          title: 'User account verified!',
-          description: 'The user can now log in to the app.',
-          variant: 'success',
-        });
-      } else {
-        toast({
-          title: 'Success',
-          description: `User ${action.replace('-', ' ')} successful`,
-        });
-      }
+      toast({
+        title: 'Success',
+        description: action === 'verify' 
+          ? 'User account verified! The user can now log in to the app.'
+          : `User ${action.replace('-', ' ')} successful`,
+        variant: 'default',
+      });
       fetchUsers();
     } catch (err) {
       console.error(`Error performing ${action} on user:`, err);
@@ -429,17 +439,37 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
     fetchCreditReports(1, searchQuery, filter);
   }, [fetchCreditReports, searchQuery]);
 
-  // Manual refresh handlers for each panel
+  // Refresh handlers
   const handleUserManagementRefresh = useCallback(() => fetchUsers(), [fetchUsers]);
   const handleCreditOversightRefresh = useCallback(() => fetchCreditReports(), [fetchCreditReports]);
   const handleLendingDecisionsRefresh = useCallback(() => fetchLendingDecisions(), [fetchLendingDecisions]);
   const handleAnalyticsRefresh = useCallback(() => fetchAnalytics(), [fetchAnalytics]);
 
+  // Toggle sidebar
+  const toggleSidebar = () => {
+    setIsSidebarOpen(!isSidebarOpen);
+  };
+
+  // Close sidebar when clicking outside on mobile
+  const handleOutsideClick = (e) => {
+    if (isSidebarOpen && !e.target.closest('.sidebar') && window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  };
+
+  // Handle sidebar navigation
+  const handleNavClick = (sectionId) => {
+    setActiveTab(sectionId);
+    if (window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  };
+
   // Loading state
   if (loading && activeTab === 'dashboard') {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px]">
-        <div className="animate-spin h-16 w-16 border-t-4 border-b-4 border-[#8bc34a] rounded-full mb-4"></div>
+        <Loader2 className="h-16 w-16 animate-spin text-[#8bc34a] mb-4" />
         <p className="text-gray-600 dark:text-gray-400">Loading dashboard...</p>
       </div>
     );
@@ -462,69 +492,136 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
 
   return (
     <TooltipProvider>
-      <div className="min-h-screen w-full bg-gray-50 dark:bg-[#18191a] flex overflow-x-hidden" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
+      <div 
+        className="min-h-screen w-full bg-gray-50 dark:bg-[#0a0a0a] flex overflow-x-hidden transition-all duration-300"
+        style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}
+        onClick={handleOutsideClick}
+      >
         {/* Navigation Sidebar */}
         <div 
-          className="fixed left-0 top-0 h-full w-64 bg-[#0d261c] dark:bg-[#18191a] border-r border-[#1a4a38] z-10 overflow-y-auto"
-          style={{ backgroundColor: PRIMARY_COLOR, ...(darkMode && { backgroundColor: MATTE_BLACK, borderRightColor: MATTE_BLACK }) }}
+          className={`
+            sidebar fixed left-0 top-0 h-full w-64 bg-[#0d261c] dark:bg-[#0a0a0a] border-r border-[#1a4a38] z-20 overflow-y-auto
+            transition-transform duration-300 transform
+            ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+          `}
+          style={{ backgroundColor: PRIMARY_COLOR, ...(darkMode && { backgroundColor: '#0a0a0a', borderRightColor: '#0a0a0a' }) }}
         >
-          <div className="p-5 border-b border-[#1a4a38] sticky top-0 bg-[#0d261c] z-10" style={darkMode ? { backgroundColor: MATTE_BLACK } : { backgroundColor: PRIMARY_COLOR }}>
-            <div className="flex items-center space-x-3">
-              <div className="bg-gradient-to-r from-[#8bc34a] to-[#ffd54f] w-10 h-10 rounded-lg flex items-center justify-center">
-                <CreditCard className="text-white" />
+          <div className="p-5 border-b border-[#1a4a38] sticky top-0 bg-[#0d261c] z-10" style={darkMode ? { backgroundColor: '#0a0a0a' } : { backgroundColor: PRIMARY_COLOR }}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <div className="bg-gradient-to-r from-[#8bc34a] to-[#ffd54f] w-10 h-10 rounded-lg flex items-center justify-center">
+                  <CreditCard className="text-white" />
+                </div>
+                <div>
+                  <h1 className="font-bold text-xl bg-gradient-to-r from-[#8bc34a] to-[#ffd54f] bg-clip-text text-transparent">MVOadmin</h1>
+                  <p className="text-xs text-[#a8d5ba]">MVOadmin Dashboard</p>
+                </div>
               </div>
-              <div>
-                <h1 className="font-bold text-xl bg-gradient-to-r from-[#8bc34a] to-[#ffd54f] bg-clip-text text-transparent">CreditAdmin</h1>
-                <p className="text-xs text-[#a8d5ba]">Admin Dashboard</p>
-              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="md:hidden text-[#a8d5ba]"
+                onClick={toggleSidebar}
+                aria-label="Close sidebar"
+              >
+                <X className="h-6 w-6" />
+              </Button>
             </div>
           </div>
           
           <div className="p-4">
             <nav className="space-y-1">
               {navSections.map((section) => (
-                <button 
-                  key={section.id}
-                  className={`flex items-center px-4 py-3 rounded-lg transition-colors w-full text-left ${
-                    activeTab === section.id 
-                      ? 'bg-[#1a4a38] text-white' 
-                      : 'text-[#a8d5ba] hover:bg-[#1a4a38]'
-                  }`}
-                  onClick={() => setActiveTab(section.id)}
-                  style={{ borderLeft: activeTab === section.id ? `4px solid ${section.color}` : 'none' }}
-                >
-                  {section.icon}
-                  {section.title}
-                </button>
+                <Tooltip key={section.id}>
+                  <TooltipTrigger asChild>
+                    <button 
+                      className={`
+                        flex items-center px-4 py-3 rounded-lg transition-colors w-full text-left
+                        ${activeTab === section.id ? 'bg-[#1a4a38] text-white' : 'text-[#a8d5ba] hover:bg-[#1a4a38]'}
+                        touch-manipulation
+                      `}
+                      onClick={() => handleNavClick(section.id)}
+                      style={{ borderLeft: activeTab === section.id ? `4px solid ${section.color}` : 'none' }}
+                      aria-label={section.title}
+                    >
+                      {section.icon}
+                      <span className="truncate">{section.title}</span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="hidden md:block">
+                    {section.title}
+                  </TooltipContent>
+                </Tooltip>
               ))}
             </nav>
           </div>
           
-          <div className="absolute bottom-0 left-0 w-full p-4 border-t border-[#1a4a38] bg-[#0d261c]" style={darkMode ? { backgroundColor: MATTE_BLACK, borderTopColor: MATTE_BLACK } : { backgroundColor: PRIMARY_COLOR }}>
-            <button 
-              onClick={logout}
-              className="flex items-center w-full px-4 py-3 rounded-lg text-[#a8d5ba] hover:bg-[#1a4a38] transition-colors"
-            >
-              <LogOut className="h-5 w-5 mr-3" />
-              Logout
-            </button>
+          <div className="absolute bottom-0 left-0 w-full p-4 border-t border-[#1a4a38] bg-[#0d261c]" style={darkMode ? { backgroundColor: '#0a0a0a', borderTopColor: '#0a0a0a' } : { backgroundColor: PRIMARY_COLOR }}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button 
+                  onClick={logout}
+                  className="flex items-center w-full px-4 py-3 rounded-lg text-[#a8d5ba] hover:bg-[#1a4a38] transition-colors touch-manipulation"
+                  aria-label="Logout"
+                >
+                  <LogOut className="h-5 w-5 mr-3" />
+                  Logout
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="right" className="hidden md:block">
+                Logout
+              </TooltipContent>
+            </Tooltip>
           </div>
         </div>
         
         {/* Main Content */}
-        <div className="ml-64 flex-1 p-6 bg-white dark:bg-[#18191a] min-h-screen transition-colors duration-300" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
+        <div className="flex-1 p-4 md:p-6 bg-white dark:bg-[#0a0a0a] min-h-screen transition-all duration-300 md:ml-64" style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}>
+          {/* Mobile Header */}
+          <div className="md:hidden flex items-center justify-between mb-4">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleSidebar}
+              aria-label="Open sidebar"
+              className="text-gray-900 dark:text-white"
+            >
+              <Menu className="h-6 w-6" />
+            </Button>
+            <h1 className="text-xl font-bold text-gray-900 dark:text-white truncate">
+              {navSections.find(s => s.id === activeTab)?.title || 'Dashboard'}
+            </h1>
+            <button
+              onClick={toggleDarkMode}
+              className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200"
+              aria-label="Toggle dark mode"
+            >
+              {darkMode ? (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+              ) : (
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-gray-800" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+              )}
+            </button>
+          </div>
+
           {/* Top Navigation */}
-          <div className="flex flex-col md:flex-row flex-wrap items-start md:items-center justify-between mb-8 gap-4">
+          <div className="hidden md:flex flex-col md:flex-row flex-wrap items-start md:items-center justify-between mb-8 gap-4">
             <div>
               <h1 className="text-2xl md:text-3xl font-bold text-gray-900 dark:text-white">
                 {navSections.find(s => s.id === activeTab)?.title || 'Dashboard'}
               </h1>
-              <p className="text-gray-600 dark:text-gray-400 mt-1">
+              <p className="text-gray-600 dark:text-gray-400 mt-1 text-sm">
                 {activeTab === 'dashboard' && 'Overview of system metrics and performance'}
                 {activeTab === 'user-management' && 'Manage system users and their permissions'}
+                {activeTab === 'user-approval' && 'Review and approve pending user registrations'}
                 {activeTab === 'credit-oversight' && 'View and manage user credit reports'}
                 {activeTab === 'batch-uploads' && 'Track batch upload history and status'}
                 {activeTab === 'lending-decisions' && 'Review lending decision logs and overrides'}
+                {activeTab === 'decision-config' && 'Configure multi-tenant decision engines and lending policies'}
                 {activeTab === 'data-tools' && 'Manual data adjustments and overrides'}
                 {activeTab === 'schema-mapping' && 'Map external data formats to internal schema'}
                 {activeTab === 'analytics' && 'Analyze user credit data and trends'}
@@ -540,133 +637,140 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
               </p>
             </div>
             
-            {/* Dark mode toggle button */}
             <button
               onClick={toggleDarkMode}
               className="p-2 rounded-full bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors duration-200"
               aria-label="Toggle dark mode"
             >
               {darkMode ? (
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
               ) : (
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-800" fill="currentColor" viewBox="0 0 24 24"><path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-gray-800" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
               )}
             </button>
           </div>
           
           {/* Dashboard Stats */}
           {activeTab === 'dashboard' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-              <Card className="bg-white dark:bg-[#18191a] border border-gray-200 dark:border-gray-700 transition-colors duration-300" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                <CardContent className="p-6" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">Total Users</p>
-                      <h3 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">{stats.totalUsers}</h3>
-                    </div>
-                    <div className="bg-green-400 text-white p-3 rounded-lg">
-                      <Users className="h-6 w-6" />
-                    </div>
-                  </div>
-                  <div className="flex items-center text-sm text-[#4caf50] mt-2">
-                    <TrendingUp className="h-4 w-4 mr-1" />
-                    <span>{stats.newUsers} new this month</span>
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6 mb-8">
+                {[
+                  {
+                    title: 'Total Users',
+                    value: stats.totalUsers,
+                    icon: <Users className="h-6 w-6" />,
+                    bgColor: 'bg-green-400',
+                    trend: `${stats.newUsers} new this month`,
+                    trendColor: 'text-[#4caf50]'
+                  },
+                  {
+                    title: 'Avg. Credit Score',
+                    value: stats.avgScore,
+                    icon: <BarChart2 className="h-6 w-6" />,
+                    bgColor: 'bg-[#8bc34a]',
+                    trend: '15 points increase',
+                    trendColor: 'text-[#4caf50]'
+                  },
+                  {
+                    title: 'Approval Rate',
+                    value: `${stats.approvalRate}%`,
+                    icon: <CheckCircle2 className="h-6 w-6" />,
+                    bgColor: 'bg-[#8bc34a]',
+                    trend: `Rejection Rate: ${stats.rejectionRate}%`,
+                    trendColor: 'text-[#f44336]'
+                  },
+                  {
+                    title: 'Active Users',
+                    value: stats.activeUsers,
+                    icon: <User className="h-6 w-6" />,
+                    bgColor: 'bg-[#2196f3]',
+                    trend: `${stats.totalUsers > 0 ? Math.round((stats.activeUsers / stats.totalUsers) * 100) : 0}% active`,
+                    trendColor: 'text-[#4caf50]'
+                  },
+                  {
+                    title: 'Flagged Users',
+                    value: 42,
+                    icon: <Flag className="h-6 w-6" />,
+                    bgColor: 'bg-[#f44336]',
+                    trend: '12 new this week',
+                    trendColor: 'text-[#f44336]'
+                  },
+                  {
+                    title: 'System Health',
+                    value: 'Operational',
+                    icon: <Server className="h-6 w-6" />,
+                    bgColor: 'bg-[#4caf50]',
+                    trend: 'All systems normal',
+                    trendColor: 'text-[#4caf50]'
+                  }
+                ].map((stat, index) => (
+                  <Card 
+                    key={index}
+                    className="bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-gray-700 transition-colors duration-300 touch-manipulation"
+                    style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}
+                  >
+                    <CardContent className="p-4 md:p-6" style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}>
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="text-sm text-gray-600 dark:text-gray-300">{stat.title}</p>
+                          <h3 className="text-xl md:text-2xl font-bold mt-1 text-gray-900 dark:text-white">{stat.value}</h3>
+                        </div>
+                        <div className={`${stat.bgColor} text-white p-2 md:p-3 rounded-lg`}>
+                          {stat.icon}
+                        </div>
+                      </div>
+                      <div className={`flex items-center text-xs md:text-sm ${stat.trendColor} mt-2`}>
+                        <TrendingUp className="h-3 w-3 md:h-4 md:w-4 mr-1" />
+                        <span>{stat.trend}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Quick Actions */}
+              <Card className="bg-white dark:bg-[#0a0a0a] border border-gray-200 dark:border-gray-700 mb-8">
+                <CardHeader>
+                  <CardTitle className="text-gray-900 dark:text-white">Quick Actions</CardTitle>
+                  <CardDescription className="text-gray-600 dark:text-gray-300">
+                    Common administrative tasks
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <Button 
+                      onClick={handleBatchUploadOpen}
+                      className="bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white"
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      Batch Upload
+                    </Button>
+                    <Button 
+                      onClick={() => setShowRegisterUser(true)}
+                      className="bg-green-600 hover:bg-green-700 dark:bg-green-500 dark:hover:bg-green-600 text-white"
+                    >
+                      <UserPlus className="h-4 w-4 mr-2" />
+                      Register User
+                    </Button>
+                    <Button 
+                      onClick={() => setActiveTab('decision-config')}
+                      className="bg-purple-600 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600 text-white"
+                    >
+                      <Settings className="h-4 w-4 mr-2" />
+                      Decision Config
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
-              
-              <Card className="bg-white dark:bg-[#18191a] border border-gray-200 dark:border-gray-700 transition-colors duration-300" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                <CardContent className="p-6" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">Avg. Credit Score</p>
-                      <h3 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">{stats.avgScore}</h3>
-                    </div>
-                    <div className="bg-[#8bc34a] text-white p-3 rounded-lg">
-                      <BarChart2 className="h-6 w-6" />
-                    </div>
-                  </div>
-                  <div className="flex items-center text-sm text-[#4caf50] mt-2">
-                    <TrendingUp className="h-4 w-4 mr-1" />
-                    <span>15 points increase</span>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-white dark:bg-[#18191a] border border-gray-200 dark:border-gray-700 transition-colors duration-300" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                <CardContent className="p-6" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">Approval Rate</p>
-                      <h3 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">{stats.approvalRate}%</h3>
-                    </div>
-                    <div className="bg-[#8bc34a] text-white p-3 rounded-lg">
-                      <CheckCircle2 className="h-6 w-6" />
-                    </div>
-                  </div>
-                  <div className="flex items-center text-sm text-[#f44336] mt-2">
-                    <span>Rejection Rate: {stats.rejectionRate}%</span>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              {/* Additional stats cards */}
-              <Card className="bg-white dark:bg-[#18191a] border border-gray-200 dark:border-gray-700 transition-colors duration-300" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                <CardContent className="p-6" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">Active Users</p>
-                      <h3 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">{stats.activeUsers}</h3>
-                    </div>
-                    <div className="bg-[#2196f3] text-white p-3 rounded-lg">
-                      <User className="h-6 w-6" />
-                    </div>
-                  </div>
-                  <div className="flex items-center text-sm text-[#4caf50] mt-2">
-                    <span>{Math.round((stats.activeUsers / stats.totalUsers) * 100)}% active</span>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-white dark:bg-[#18191a] border border-gray-200 dark:border-gray-700 transition-colors duration-300" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                <CardContent className="p-6" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">Flagged Users</p>
-                      <h3 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">42</h3>
-                    </div>
-                    <div className="bg-[#f44336] text-white p-3 rounded-lg">
-                      <Flag className="h-6 w-6" />
-                    </div>
-                  </div>
-                  <div className="flex items-center text-sm text-[#f44336] mt-2">
-                    <span>12 new this week</span>
-                  </div>
-                </CardContent>
-              </Card>
-              
-              <Card className="bg-white dark:bg-[#18191a] border border-gray-200 dark:border-gray-700 transition-colors duration-300" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                <CardContent className="p-6" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">System Health</p>
-                      <h3 className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">Operational</h3>
-                    </div>
-                    <div className="bg-[#4caf50] text-white p-3 rounded-lg">
-                      <Server className="h-6 w-6" />
-                    </div>
-                  </div>
-                  <div className="flex items-center text-sm text-[#4caf50] mt-2">
-                    <span>All systems normal</span>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+            </>
           )}
           
           {/* Content Sections */}
-          <div className="space-y-6" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
-            {/* User Management */}
+          <div className="space-y-4 md:space-y-6" style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}>
             {activeTab === 'user-management' && (
               <Suspense fallback={<div className="p-8 text-center">Loading user management...</div>}>
                 <UserManagementPanel
@@ -678,7 +782,6 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                   fetchUsers={fetchUsers}
                   navigate={navigate}
                   setShowRegisterUser={setShowRegisterUser}
-                  setShowBatchUpload={setShowBatchUpload}
                   setActiveTab={setActiveTab}
                   handleUserAction={handleUserAction}
                   loading={loading}
@@ -688,12 +791,10 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
               </Suspense>
             )}
 
-            {/* User Approval */}
             {activeTab === 'user-approval' && (
               <UserApproval />
             )}
 
-            {/* Credit Oversight */}
             {activeTab === 'credit-oversight' && (
               <Suspense fallback={<div className="p-8 text-center">Loading credit oversight...</div>}>
                 <CreditOversightPanel
@@ -711,14 +812,14 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                   toast={toast}
                   api={api}
                   onRefresh={handleCreditOversightRefresh}
+                  setActiveTab={setActiveTab}
                 />
               </Suspense>
             )}
 
-            {/* Batch Uploads */}
             {activeTab === 'batch-uploads' && (
-              <div className="space-y-6">
-                <Card className="border border-[#1a4a38]" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
+              <div className="space-y-4 md:space-y-6">
+                <Card className="border border-[#1a4a38] touch-manipulation" style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}>
                   <CardHeader>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                       <div>
@@ -727,23 +828,16 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                           Upload and manage credit data batches
                         </CardDescription>
                       </div>
-                      <div className="flex items-center space-x-2">
-                        <Button 
-                          onClick={() => setShowBatchUpload(true)}
-                          className="bg-[#ff9800] hover:bg-[#e68a00] text-white"
-                        >
-                          <Upload className="mr-2 h-4 w-4" />
-                          New Upload
-                        </Button>
-                      </div>
                     </div>
                   </CardHeader>
                   <CardContent>
-                    <AdminBatchUpload onUploadComplete={handleUploadComplete} />
+                    <Suspense fallback={<div className="p-8 text-center">Loading batch upload...</div>}>
+                      <AdminBatchUpload onUploadComplete={handleUploadComplete} />
+                    </Suspense>
                   </CardContent>
                 </Card>
                 
-                <Card className="border border-[#1a4a38]" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
+                <Card className="border border-[#1a4a38] touch-manipulation" style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}>
                   <CardHeader>
                     <CardTitle className="text-gray-900 dark:text-white">Upload History</CardTitle>
                     <CardDescription className="text-gray-600 dark:text-[#a8d5ba]">
@@ -757,7 +851,6 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
               </div>
             )}
 
-            {/* Lending Decisions */}
             {activeTab === 'lending-decisions' && (
               <Suspense fallback={<div className="p-8 text-center">Loading lending decisions...</div>}>
                 <LendingDecisionsPanel
@@ -771,10 +864,15 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
               </Suspense>
             )}
 
-            {/* Data Tools */}
+            {activeTab === 'decision-config' && (
+              <Suspense fallback={<div className="p-8 text-center">Loading decision configuration...</div>}>
+                <DecisionConfigPanel />
+              </Suspense>
+            )}
+
             {activeTab === 'data-tools' && (
-              <div className="space-y-6">
-                <Card className="border border-[#1a4a38]" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
+              <div className="space-y-4 md:space-y-6">
+                <Card className="border border-[#1a4a38] touch-manipulation" style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}>
                   <CardHeader>
                     <CardTitle className="text-gray-900 dark:text-white">Data Overrides</CardTitle>
                     <CardDescription className="text-gray-600 dark:text-[#a8d5ba]">
@@ -782,7 +880,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                       <div className="border border-[#1a4a38] rounded-lg p-4">
                         <h3 className="font-semibold mb-4">Update Credit Factors</h3>
                         <div className="space-y-4">
@@ -794,7 +892,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                             <label className="block text-sm font-medium mb-1">Factor to Update</label>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="outline" className="w-full justify-between">
+                                <Button variant="outline" className="w-full justify-between text-sm">
                                   Select factor
                                   <ChevronDown className="h-4 w-4" />
                                 </Button>
@@ -816,7 +914,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                             <label className="block text-sm font-medium mb-1">Reason for Change</label>
                             <Input placeholder="Explain the reason..." />
                           </div>
-                          <Button className="w-full bg-[#607d8b] hover:bg-[#546e7a] text-white">
+                          <Button className="w-full bg-[#607d8b] hover:bg-[#546e7a] text-white touch-manipulation" size="sm">
                             Update Factor
                           </Button>
                         </div>
@@ -833,7 +931,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                             <label className="block text-sm font-medium mb-1">New Decision</label>
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild>
-                                <Button variant="outline" className="w-full justify-between">
+                                <Button variant="outline" className="w-full justify-between text-sm">
                                   Select decision
                                   <ChevronDown className="h-4 w-4" />
                                 </Button>
@@ -853,7 +951,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                             <label className="block text-sm font-medium mb-1">Additional Notes</label>
                             <Input placeholder="Any additional information..." />
                           </div>
-                          <Button className="w-full bg-[#607d8b] hover:bg-[#546e7a] text-white">
+                          <Button className="w-full bg-[#607d8b] hover:bg-[#546e7a] text-white touch-manipulation" size="sm">
                             Override Decision
                           </Button>
                         </div>
@@ -862,7 +960,7 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                   </CardContent>
                 </Card>
                 
-                <Card className="border border-[#1a4a38]" style={darkMode ? { backgroundColor: MATTE_BLACK } : {}}>
+                <Card className="border border-[#1a4a38] touch-manipulation" style={darkMode ? { backgroundColor: '#0a0a0a' } : {}}>
                   <CardHeader>
                     <CardTitle className="text-gray-900 dark:text-white">Audit Trail</CardTitle>
                     <CardDescription className="text-gray-600 dark:text-[#a8d5ba]">
@@ -870,26 +968,31 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="flex flex-col md:flex-row gap-6">
-                      {/* Admin List */}
-                      <div className="md:w-1/4 border-r border-[#1a4a38] pr-4">
+                    <div className="flex flex-col md:flex-row gap-4 md:gap-6">
+                      <div className="md:w-1/3 border-r border-[#1a4a38] pr-4">
                         <h4 className="font-semibold mb-2">Admins</h4>
                         <div className="space-y-2 max-h-72 overflow-y-auto">
                           {adminList.map((admin) => (
                             <button
                               key={admin._id}
-                              className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${selectedAdmin?._id === admin._id ? 'bg-[#e0efe9] dark:bg-[#1a4a38] font-bold' : 'hover:bg-[#f0f7f4] dark:hover:bg-[#1a4a38]'}`}
+                              className={`
+                                w-full text-left px-3 py-2 rounded-lg transition-colors
+                                ${selectedAdmin?._id === admin._id ? 'bg-[#e0efe9] dark:bg-[#1a4a38] font-bold' : 'hover:bg-[#f0f7f4] dark:hover:bg-[#1a4a38]'}
+                                touch-manipulation
+                              `}
                               onClick={() => setSelectedAdmin(admin)}
+                              aria-label={`Select ${admin.firstName || admin.name} ${admin.lastName || ''}`}
                             >
                               {admin.firstName || admin.name || ''} {admin.lastName || ''}
-                              <div className="text-xs text-gray-500">{admin.email}</div>
+                              <div className="text-xs text-gray-500 truncate">{admin.email}</div>
                             </button>
                           ))}
                         </div>
                       </div>
-                      {/* Admin Logs */}
                       <div className="flex-1">
-                        <h4 className="font-semibold mb-2">{selectedAdmin ? `Actions by ${selectedAdmin.firstName || selectedAdmin.name}` : 'Select an admin to view their actions'}</h4>
+                        <h4 className="font-semibold mb-2">
+                          {selectedAdmin ? `Actions by ${selectedAdmin.firstName || selectedAdmin.name}` : 'Select an admin to view their actions'}
+                        </h4>
                         {adminLogsLoading ? (
                           <div className="text-center py-8">
                             <RefreshCw className="h-8 w-8 mx-auto mb-2 animate-spin text-[#2196f3]" />
@@ -930,24 +1033,39 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
               </div>
             )}
 
-            {/* Schema Mapping */}
             {activeTab === 'schema-mapping' && (
               <SchemaMappingEngine />
             )}
 
-            {/* Analytics */}
             {activeTab === 'analytics' && (
               <Suspense fallback={<div className="p-8 text-center">Loading analytics...</div>}>
                 <AnalyticsPanel analyticsData={analyticsData} loading={loading} error={error} onRefresh={handleAnalyticsRefresh} />
               </Suspense>
             )}
 
-            {/* Lender Access History */}
+            {activeTab === 'fraud' && <FraudDetectionPanel />}
+
+            {activeTab === 'scoring-engine' && <ScoringEngineControl />}
+
+            {activeTab === 'ai-settings' && <AISettingsPanel />}
+
+            {activeTab === 'compliance' && <CompliancePanel />}
+
+            {activeTab === 'access-control' && <RoleManagement />}
+
+            {activeTab === 'notifications' && <NotificationCenter />}
+
+            {activeTab === 'support' && (
+              <Suspense fallback={<div className="p-8 text-center">Loading support center...</div>}>
+                <SupportCenterPanel />
+              </Suspense>
+            )}
+
+            {activeTab === 'system' && <SystemMonitor />}
+
             {activeTab === 'lender-access-history' && (
               <LenderAccessHistoryPanel />
             )}
-
-            {/* Other panels... (omitted for brevity) */}
           </div>
           
           {/* Modals */}
@@ -965,11 +1083,22 @@ const AdminDashboard = ({ darkMode, toggleDarkMode }) => {
             }}
           />
 
-          <AdminBatchUpload 
-            open={showBatchUpload}
-            onOpenChange={setShowBatchUpload}
-            onUploadComplete={handleUploadComplete}
-          />
+          {/* Batch Upload Dialogs */}
+          {showBatchUpload && (
+            <BatchUploadDialog 
+              showBatchUpload={showBatchUpload}
+              handleBatchUploadClose={handleBatchUploadClose}
+              handleBatchUploadComplete={handleBatchUploadComplete}
+              toast={toast}
+            />
+          )}
+
+          {batchResults && (
+            <BatchUploadResults 
+              results={batchResults}
+              onClose={() => setBatchResults(null)}
+            />
+          )}
         </div>
       </div>
     </TooltipProvider>

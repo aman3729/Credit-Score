@@ -1,7 +1,7 @@
 // Notify users whose consent is about to expire
 import mongoose from 'mongoose';
 import User from '../models/User.js';
-import { sendEmail } from '../utils/email.js';
+import { sendEmail } from '../config/email.js';
 import dotenv from 'dotenv';
 dotenv.config();
 

@@ -1,4 +1,6 @@
-// Configuration - Easily adjustable parameters
+import crypto from 'crypto';
+
+// Configuration - Adjusted for Ethiopian market and lending engine harmony
 export const SCORE_CONFIG = {
   BASE_RANGE: { MIN: 300, MAX: 850 },
   CLASSIFICATIONS: {
@@ -8,30 +10,30 @@ export const SCORE_CONFIG = {
     FAIR: 580
   },
   WEIGHTS: {
-    PAYMENT_HISTORY: 35,     // Aligned with FICO
-    UTILIZATION: 30,         // Aligned with FICO
+    PAYMENT_HISTORY: 35, // Aligned with FICO
+    UTILIZATION: 30,    // Aligned with FICO
     CREDIT_AGE: 15,
     CREDIT_MIX: 10,
     INQUIRIES: 5,
-    DTI: 10                 // Adjusted for balance
+    DTI: 15            // Increased weight to emphasize DTI
   },
   DTI_THRESHOLDS: {
-    IDEAL: 0.35,
-    WARNING: 0.50,
-    DANGER: 0.70
+    IDEAL: 0.20,
+    WARNING: 0.40,     // Aligned with lending engine's 40% cap
+    DANGER: 0.65       // Aligned with lending engine's rejection threshold
   },
   PENALTIES: {
-    APPLICATION: { base: 1.5, recent: 2.0, older: 1.0, recentThreshold: 6 }, // months
+    APPLICATION: { base: 1.5, recent: 2.0, older: 1.0, recentThreshold: 6 },
     DEFAULT_HISTORY: { base: 3, recent: 4, older: 2, recentThreshold: 12 },
     MISSED_STREAK: { base: 2, recent: 3, older: 1, recentThreshold: 6 },
     MISSED_12: [0, 3, 1],
     DELINQUENCY: [6, 12, 2],
-    INACTIVITY: { threshold: 180, value: 2, max: 365, maxValue: 5 },
+    INACTIVITY: { threshold: 360, value: 2, max: 720, maxValue: 5 }, // Adjusted for 12-month threshold
     LOAN_COUNT: 5,
-    HIGH_DTI: [0.5, 0.7, 5]
+    HIGH_DTI: [0.40, 0.65, 5] // Aligned with lending engine
   },
   BONUSES: {
-    ACTIVITY: { threshold: 10, value: 3 },
+    ACTIVITY: { threshold: 5, value: 3 }, // Lowered threshold for recent activity
     ACCOUNT_AGE: [
       { months: 24, value: 1 },
       { months: 36, value: 2 }
@@ -44,20 +46,17 @@ export const SCORE_CONFIG = {
       { threshold: 0.95, value: 2 },
       { threshold: 0.85, value: 1 }
     ],
-    LOW_DTI: { threshold: 0.3, value: 3 }
+    LOW_DTI: { threshold: 0.30, value: 3 }
   },
   LOAN_TYPES: {
-    CONSUMER: { PAYMENT_HISTORY: 35, UTILIZATION: 30, DTI: 10 },
+    CONSUMER: { PAYMENT_HISTORY: 35, UTILIZATION: 30, DTI: 15 },
     MORTGAGE: { PAYMENT_HISTORY: 30, UTILIZATION: 25, DTI: 20 },
     AUTO: { PAYMENT_HISTORY: 35, UTILIZATION: 25, DTI: 15 }
   },
-  // --- Added for lending decision logic ---
+  // Harmonized with lending engine
   decisionMatrix: {
     approveScore: 700,
-    conditionalApprove: {
-      score: 650,
-      maxDti: 0.4
-    },
+    conditionalApprove: { score: 650, maxDti: 0.40 },
     reviewScore: 600
   },
   riskTiers: [
@@ -69,22 +68,32 @@ export const SCORE_CONFIG = {
   ],
   collateral: {
     minValue: 5000,
-    qualityThreshold: 0.7,
+    qualityThreshold: 0.6,
+    recessionQualityThreshold: 0.7,
+    loanToValueRatio: 0.7,
     requiredForHighRisk: true
   },
   recessionAdjustments: {
-    rateIncrease: 2.5,
-    maxAmountReduction: 0.8,
+    rateIncrease: 2.0,
+    maxAmountReduction: 0.85,
+    collateralDiscount: 0.8,
     maxTerm: 36
   },
-  maxInterestRate: 35.99,
   baseAmounts: {
-    'Excellent': 100000,
-    'Very Good': 75000,
-    'Good': 50000,
-    'Fair': 25000,
-    'Poor': 10000
-  }
+    EXCELLENT: 500000, // Adjusted for Ethiopia
+    VERY_GOOD: 300000,
+    GOOD: 200000,
+    FAIR: 100000,
+    POOR: 30000
+  },
+  incomeMultipliers: {
+    EXCELLENT: 8,
+    VERY_GOOD: 7,
+    GOOD: 6,
+    FAIR: 4,
+    POOR: 2
+  },
+  inactivityThresholdMonths: 12 // Aligned with lending engine
 };
 
 // Cached config for performance
@@ -111,8 +120,8 @@ const CLASSIFIERS = {
     return 'Poor';
   },
   creditMix: (mix) => {
-    return mix >= 0.7 ? 'Excellent' : 
-           mix >= 0.5 ? 'Good' : 
+    return mix >= 0.7 ? 'Excellent' :
+           mix >= 0.5 ? 'Good' :
            mix >= 0.3 ? 'Fair' : 'Poor';
   },
   accountCount: (count) => {
@@ -128,9 +137,9 @@ const CLASSIFIERS = {
     return 'Poor';
   },
   dti: (ratio) => {
-    if (ratio < 0.2) return 'Excellent';
-    if (ratio < 0.35) return 'Good';
-    if (ratio < 0.5) return 'Fair';
+    if (ratio < 0.20) return 'Excellent';
+    if (ratio < 0.40) return 'Good'; // Aligned with lending engine
+    if (ratio < 0.65) return 'Fair';
     return 'Poor';
   }
 };
@@ -145,24 +154,26 @@ class CreditScoreError extends Error {
 
 // Helper functions
 const hashPhone = (phone) => {
-  const salt = process.env.PHONE_SALT || 'default-salt-value';
-  return crypto.createHash('md5') // Lighter hashing for performance
+  const salt = process.env.PHONE_SALT;
+  if (!salt) {
+    throw new CreditScoreError('PHONE_SALT environment variable is required for phone hashing');
+  }
+  return crypto.createHash('sha256')
     .update(salt + phone)
     .digest('hex');
 };
 
-// Helper to clamp values between 0 and 100
 const cap100 = v => Math.max(0, Math.min(100, v));
 
 const validateInput = (key, value, min, max) => {
-  if (typeof value !== 'number' || value < min || value > max) {
+  if (typeof value !== 'number' || isNaN(value) || value < min || value > max) {
     throw new CreditScoreError(
       `Invalid ${key}: ${value}. Must be number between ${min}-${max}`
     );
   }
 };
 
-const validateDate = (dateStr, currentDate) => {
+const validateDate = (dateStr) => {
   const date = new Date(dateStr);
   if (isNaN(date.getTime())) {
     throw new CreditScoreError(`Invalid date: ${dateStr}`);
@@ -170,40 +181,36 @@ const validateDate = (dateStr, currentDate) => {
   return date;
 };
 
-// Non-linear normalization
 const normalizeUtilization = (util) => {
-  return Math.max(0, 1 - Math.log10(1 + 9 * util)); // Logarithmic decay
+  return Math.max(0, 1 - Math.log10(1 + 9 * util));
 };
 
 const normalizeInquiries = (inq) => {
-  return Math.max(0, 1 - Math.log10(1 + 2 * inq)); // Logarithmic decay
+  return Math.max(0, 1 - Math.log10(1 + 2 * inq));
 };
 
-// Calculate DTI score with fallback
 const calculateDtiScore = (dti, config, userData) => {
   let dtiRatio = dti;
   if (userData.monthlyIncome <= 0 && userData.assets) {
-    dtiRatio = userData.monthlyDebtPayments / (userData.assets / 12); // Assets-based fallback
+    dtiRatio = userData.monthlyDebtPayments / (userData.assets / 12);
   }
-  
-  // Non-linear DTI scoring
+
   let dtiScore;
   if (dtiRatio <= config.DTI_THRESHOLDS.IDEAL) {
     dtiScore = 1.0;
   } else if (dtiRatio <= config.DTI_THRESHOLDS.WARNING) {
-    dtiScore = 1 - Math.pow((dtiRatio - config.DTI_THRESHOLDS.IDEAL) / 
-                   (config.DTI_THRESHOLDS.WARNING - config.DTI_THRESHOLDS.IDEAL), 2) * 0.3;
+    dtiScore = 1 - Math.pow((dtiRatio - config.DTI_THRESHOLDS.IDEAL) /
+                   (config.DTI_THRESHOLDS.WARNING - config.DTI_THRESHOLDS.IDEAL), 2) * 0.4;
   } else if (dtiRatio <= config.DTI_THRESHOLDS.DANGER) {
-    dtiScore = 0.7 - Math.pow((dtiRatio - config.DTI_THRESHOLDS.WARNING) / 
-                     (config.DTI_THRESHOLDS.DANGER - config.DTI_THRESHOLDS.WARNING), 2) * 0.4;
+    dtiScore = 0.6 - Math.pow((dtiRatio - config.DTI_THRESHOLDS.WARNING) /
+                     (config.DTI_THRESHOLDS.DANGER - config.DTI_THRESHOLDS.WARNING), 2) * 0.5;
   } else {
-    dtiScore = 0.3 * Math.exp(-dtiRatio); // Exponential decay for high DTI
+    dtiScore = 0.1 * Math.exp(-dtiRatio);
   }
-  
+
   return Math.max(0.1, dtiScore);
 };
 
-// Enhanced credit mix calculation
 const calculateCreditMix = (loanTypeCounts, existingMix) => {
   const types = [
     loanTypeCounts.creditCard || 0,
@@ -212,79 +219,72 @@ const calculateCreditMix = (loanTypeCounts, existingMix) => {
     loanTypeCounts.mortgage || 0,
     loanTypeCounts.studentLoan || 0
   ].filter(count => count > 0);
-  
-  const diversityScore = Math.min(1, types.length / 5); // Max 5 types
-  const balanceScore = types.length > 1 ? 1 - Math.max(...types) / (types.reduce((sum, v) => sum + v, 0) || 1) : 0;
-  return Math.min(1, (existingMix + 0.5 * diversityScore + 0.3 * balanceScore) / 10);
+
+  const diversityScore = Math.min(1, types.length / 5);
+  const totalAccounts = types.reduce((sum, v) => sum + v, 0);
+  const balanceScore = totalAccounts > 0 ? 1 - Math.max(...types) / totalAccounts : 0;
+
+  return Math.min(1,
+    (existingMix * 0.4) +
+    (diversityScore * 0.4) +
+    (balanceScore * 0.2)
+  );
 };
 
-// Time-weighted penalties
 const calculatePenalties = (userData, config, currentDate, lastActiveDate) => {
   const {
-    recentLoanApplications = 0,
-    applicationDates = [], // Array of application dates
-    defaultCountLast3Years = 0,
-    defaultDates = [], // Array of default dates
-    consecutiveMissedPayments = 0,
-    missedPaymentDates = [], // Array of missed payment dates
-    missedPaymentsLast12 = 0,
-    monthsSinceLastDelinquency = 999,
+    applicationDates = [],
+    defaultDates = [],
+    missedPaymentDates = [],
     activeLoanCount = 0,
     monthlyIncome = 1,
-    monthlyDebtPayments = 0
+    monthlyDebtPayments = 0,
+    missedPaymentsLast12 = 0,
+    monthsSinceLastDelinquency = 999,
+    transactionsLast90Days = 0
   } = userData;
 
-  // Time-weighted application penalty
   const applicationPenalty = applicationDates.reduce((sum, date) => {
-    const months = (currentDate - new Date(date)) / (1000 * 60 * 60 * 24 * 30);
-    return sum + (months <= config.PENALTIES.APPLICATION.recentThreshold ? 
+    const months = (currentDate - validateDate(date)) / (1000 * 60 * 60 * 24 * 30);
+    return sum + (months <= config.PENALTIES.APPLICATION.recentThreshold ?
       config.PENALTIES.APPLICATION.recent : config.PENALTIES.APPLICATION.older);
-  }, 0) || -recentLoanApplications * config.PENALTIES.APPLICATION.base;
-  
-  // Time-weighted default history penalty
+  }, 0);
+
   const defaultHistoryPenalty = defaultDates.reduce((sum, date) => {
-    const months = (currentDate - new Date(date)) / (1000 * 60 * 60 * 24 * 30);
-    return sum + (months <= config.PENALTIES.DEFAULT_HISTORY.recentThreshold ? 
+    const months = (currentDate - validateDate(date)) / (1000 * 60 * 60 * 24 * 30);
+    return sum + (months <= config.PENALTIES.DEFAULT_HISTORY.recentThreshold ?
       config.PENALTIES.DEFAULT_HISTORY.recent : config.PENALTIES.DEFAULT_HISTORY.older);
-  }, 0) || -defaultCountLast3Years * config.PENALTIES.DEFAULT_HISTORY.base;
-  
-  // Time-weighted missed payments penalty
+  }, 0);
+
   const missedStreakPenalty = missedPaymentDates.reduce((sum, date) => {
-    const months = (currentDate - new Date(date)) / (1000 * 60 * 60 * 24 * 30);
-    return sum + (months <= config.PENALTIES.MISSED_STREAK.recentThreshold ? 
+    const months = (currentDate - validateDate(date)) / (1000 * 60 * 60 * 24 * 30);
+    return sum + (months <= config.PENALTIES.MISSED_STREAK.recentThreshold ?
       config.PENALTIES.MISSED_STREAK.recent : config.PENALTIES.MISSED_STREAK.older);
-  }, 0) || -consecutiveMissedPayments * config.PENALTIES.MISSED_STREAK.base;
-  
-  const missedPenalty = 
-    missedPaymentsLast12 >= config.PENALTIES.MISSED_12[1] 
-      ? -config.PENALTIES.MISSED_12[2] 
-      : missedPaymentsLast12 >= config.PENALTIES.MISSED_12[0] 
-        ? -config.PENALTIES.MISSED_12[2] / 2 
-        : 0;
-  
-  // Delinquency penalty
+  }, 0);
+
+  const missedPenalty =
+    missedPaymentsLast12 >= config.PENALTIES.MISSED_12[1] ?
+      -config.PENALTIES.MISSED_12[2] :
+      missedPaymentsLast12 >= config.PENALTIES.MISSED_12[0] ?
+        -config.PENALTIES.MISSED_12[2] / 2 : 0;
+
   const delinquencyPenalty =
     monthsSinceLastDelinquency <= config.PENALTIES.DELINQUENCY[0] ? -config.PENALTIES.DELINQUENCY[2] :
     monthsSinceLastDelinquency <= config.PENALTIES.DELINQUENCY[1] ? -config.PENALTIES.DELINQUENCY[2] / 2 : 0;
-  
-  // Inactivity penalty (sliding scale)
-  const inactivityDays = (currentDate - lastActiveDate) / 86400000;
-  const inactivityPenalty = 
-    inactivityDays > config.PENALTIES.INACTIVITY.max ? -config.PENALTIES.INACTIVITY.maxValue : 
-    inactivityDays > config.PENALTIES.INACTIVITY.threshold ? 
-      -config.PENALTIES.INACTIVITY.value * (inactivityDays / config.PENALTIES.INACTIVITY.max) : 0;
-  
-  // Loan count penalty
+
+  // Inactivity penalty adjusted for recent activity
+  const inactivityDays = (currentDate - lastActiveDate) / (1000 * 60 * 60 * 24);
+  const inactivityPenalty = (inactivityDays > config.PENALTIES.INACTIVITY.threshold && transactionsLast90Days === 0) ?
+    -config.PENALTIES.INACTIVITY.value * Math.min(1, inactivityDays / config.PENALTIES.INACTIVITY.max) : 0;
+
   const loanCountPenalty = activeLoanCount > config.PENALTIES.LOAN_COUNT ? -2 : 0;
-  
-  // DTI penalty
-  const dtiRatio = monthlyDebtPayments / monthlyIncome;
-  const dtiPenalty = 
-    dtiRatio >= config.PENALTIES.HIGH_DTI[1] 
-      ? -config.PENALTIES.HIGH_DTI[2] 
-      : dtiRatio >= config.PENALTIES.HIGH_DTI[0] 
-        ? -config.PENALTIES.HIGH_DTI[2] / 2 
-        : 0;
+
+  const dtiRatio = monthlyIncome > 0 ? monthlyDebtPayments / monthlyIncome : 0;
+  const dtiPenalty =
+    dtiRatio >= config.PENALTIES.HIGH_DTI[1] ?
+      -config.PENALTIES.HIGH_DTI[2] :
+      dtiRatio >= config.PENALTIES.HIGH_DTI[0] ?
+        -config.PENALTIES.HIGH_DTI[2] / 2 : 0;
 
   return {
     applicationPenalty,
@@ -298,6 +298,7 @@ const calculatePenalties = (userData, config, currentDate, lastActiveDate) => {
     total: [
       applicationPenalty,
       defaultHistoryPenalty,
+      missedStreakPenalty,
       missedPenalty,
       delinquencyPenalty,
       inactivityPenalty,
@@ -307,7 +308,6 @@ const calculatePenalties = (userData, config, currentDate, lastActiveDate) => {
   };
 };
 
-// Calculate bonuses
 const calculateBonuses = (userData, config) => {
   const {
     transactionsLast90Days = 0,
@@ -318,25 +318,25 @@ const calculateBonuses = (userData, config) => {
     monthlyDebtPayments = 0
   } = userData;
 
-  const activityBonus = transactionsLast90Days > config.BONUSES.ACTIVITY.threshold 
-    ? config.BONUSES.ACTIVITY.value : 0;
-  
+  const activityBonus = transactionsLast90Days >= config.BONUSES.ACTIVITY.threshold ?
+    config.BONUSES.ACTIVITY.value : 0;
+
   let accountAgeBonus = 0;
   config.BONUSES.ACCOUNT_AGE.forEach(tier => {
     if (oldestAccountAge >= tier.months) {
       accountAgeBonus = Math.max(accountAgeBonus, tier.value);
     }
   });
-  
-  const paymentRateBonus = config.BONUSES.PAYMENT_RATE.find(b => 
-    onTimePaymentRate >= b.threshold)?.value || 0;
-  
-  const recentOnTimeBonus = config.BONUSES.RECENT_ON_TIME.find(b => 
-    onTimeRateLast6Months >= b.threshold)?.value || 0;
-  
-  const dtiRatio = monthlyDebtPayments / monthlyIncome;
-  const lowDtiBonus = dtiRatio <= config.BONUSES.LOW_DTI.threshold 
-    ? config.BONUSES.LOW_DTI.value : 0;
+
+  const paymentRateBonus = config.BONUSES.PAYMENT_RATE.reduce((max, b) =>
+    onTimePaymentRate >= b.threshold ? Math.max(max, b.value) : max, 0);
+
+  const recentOnTimeBonus = config.BONUSES.RECENT_ON_TIME.reduce((max, b) =>
+    onTimeRateLast6Months >= b.threshold ? Math.max(max, b.value) : max, 0);
+
+  const dtiRatio = monthlyIncome > 0 ? monthlyDebtPayments / monthlyIncome : 0;
+  const lowDtiBonus = dtiRatio <= config.BONUSES.LOW_DTI.threshold ?
+    config.BONUSES.LOW_DTI.value : 0;
 
   return {
     activityBonus,
@@ -359,50 +359,58 @@ const plugins = [];
 export const registerPlugin = (plugin) => {
   if (typeof plugin === 'function') {
     plugins.push(plugin);
+  } else {
+    console.warn('[CreditScore] Plugin must be a function');
   }
 };
 
 // AI integration placeholder
 const applyAIModel = (userData, score, options) => {
   if (!options.aiEnabled) return { adjustment: 0, explanation: [] };
-  // Placeholder for AI model (e.g., ML-based anomaly detection)
+
   const explanation = ['AI adjustment applied based on behavioral patterns'];
-  return { adjustment: 0, explanation }; // To be implemented
+  return { adjustment: 0, explanation };
 };
 
 // Main scoring function
+/**
+ * Calculates credit score based on comprehensive financial data
+ * @param {Object} userData - User's financial profile
+ * @param {Object} [options={}] - Calculation options
+ * @returns {Object} - Credit score result with detailed breakdown
+ * @throws {CreditScoreError} - For invalid inputs or calculation errors
+ */
 export function calculateCreditScore(userData, options = {}) {
   if (!userData) throw new CreditScoreError('User data is required for credit scoring');
 
   try {
-    // Configuration setup
     const config = { ...CACHED_CONFIG, ...options.scoringConfig };
-    const currentDate = options.currentDate ? new Date(options.currentDate) : new Date();
+    const currentDate = options.currentDate ? validateDate(options.currentDate) : new Date();
 
-    // Dynamic weights based on loan type
     const loanType = options.loanType || 'CONSUMER';
     const weights = { ...config.WEIGHTS, ...(config.LOAN_TYPES[loanType] || {}) };
+    const totalWeights = Object.values(weights).reduce((sum, w) => sum + w, 0);
+
     if (options.recessionMode) {
-      weights.PAYMENT_HISTORY = weights.PAYMENT_HISTORY + 5;
-      weights.UTILIZATION = weights.UTILIZATION + 5;
-      weights.DTI = weights.DTI - 5;
+      weights.PAYMENT_HISTORY += 5;
+      weights.UTILIZATION += 5;
+      weights.DTI = Math.max(0, weights.DTI - 5);
     }
 
-    // Input destructuring with defaults
     const {
       phoneNumber,
       paymentHistory = 0,
-      creditUtilization = 1,
+      creditUtilization = 0,
       creditAge = 0,
       creditMix = 0,
-      inquiries = 1,
-      lastActiveDate = currentDate,
+      inquiries = 0,
+      lastActiveDate = currentDate.toISOString(),
       activeLoanCount = 0,
       oldestAccountAge = 0,
       transactionsLast90Days = 0,
       onTimePaymentRate = 1,
       recentLoanApplications = 0,
-      applicationDates = [], // Ensure default to empty array
+      applicationDates = [],
       defaultCountLast3Years = 0,
       defaultDates = [],
       consecutiveMissedPayments = 0,
@@ -413,11 +421,39 @@ export function calculateCreditScore(userData, options = {}) {
       monthsSinceLastDelinquency = 999,
       monthlyIncome = 1,
       monthlyDebtPayments = 0,
-      assets = 0 // For DTI fallback
+      assets = 0,
+      employmentStatus = 'other',
+      collateralValue = 0,
+      collateralQuality = 0
     } = userData;
 
-    // Validate dates
-    const lastActiveDateObj = validateDate(lastActiveDate, currentDate);
+    const lastActiveDateObj = validateDate(lastActiveDate);
+
+    // Validate employment status
+    const validEmploymentStatuses = ['employed', 'self-employed', 'unemployed', 'retired', 'student', 'other'];
+    if (!validEmploymentStatuses.includes(employmentStatus)) {
+      console.warn(`[CreditScore] Invalid employment status: ${employmentStatus}, defaulting to 'other'`);
+      userData.employmentStatus = 'other';
+    }
+
+    // Validate inputs
+    validateInput('paymentHistory', paymentHistory, 0, 1);
+    validateInput('creditUtilization', creditUtilization, 0, 5);
+    validateInput('creditAge', creditAge, 0, 1);
+    validateInput('onTimePaymentRate', onTimePaymentRate, 0, 1);
+    validateInput('inquiries', inquiries, 0, 50);
+    validateInput('activeLoanCount', activeLoanCount, 0, 100);
+
+    if (monthlyIncome <= 0 && assets <= 0) {
+      throw new CreditScoreError('Monthly income or assets must be greater than 0');
+    }
+
+    // Check for inactivity conflict
+    const inactivityDays = (currentDate - lastActiveDateObj) / (1000 * 60 * 60 * 24);
+    if (inactivityDays > config.PENALTIES.INACTIVITY.threshold && transactionsLast90Days > 0) {
+      console.warn('[CreditScore] Inactivity conflict: transactionsLast90Days > 0 but lastActiveDate is old');
+      userData.lastActiveDate = new Date(currentDate - (90 * 24 * 60 * 60 * 1000)).toISOString();
+    }
 
     if (options.debug) {
       console.debug('[Credit Score][Input]', {
@@ -426,7 +462,7 @@ export function calculateCreditScore(userData, options = {}) {
         creditAge,
         creditMix,
         inquiries,
-        lastActiveDate: lastActiveDateObj,
+        lastActiveDate: userData.lastActiveDate,
         activeLoanCount,
         oldestAccountAge,
         transactionsLast90Days,
@@ -434,69 +470,46 @@ export function calculateCreditScore(userData, options = {}) {
         recentLoanApplications,
         defaultCountLast3Years,
         consecutiveMissedPayments,
-        defaultDates,
-        missedPaymentDates,
-        loanTypeCounts,
         missedPaymentsLast12,
         onTimeRateLast6Months,
         monthsSinceLastDelinquency,
         monthlyIncome,
         monthlyDebtPayments,
-        assets
+        assets,
+        employmentStatus,
+        collateralValue,
+        collateralQuality
       });
     }
 
-    // Input validation
-    validateInput('paymentHistory', paymentHistory, 0, 1);
-    validateInput('creditUtilization', creditUtilization, 0, 5);
-    validateInput('creditAge', creditAge, 0, 1);
-    validateInput('onTimePaymentRate', onTimePaymentRate, 0, 1);
-    validateInput('inquiries', inquiries, 0, 50);
-    validateInput('activeLoanCount', activeLoanCount, 0, 100);
-    
-    if (monthlyIncome <= 0 && assets <= 0) {
-      throw new CreditScoreError('Monthly income or assets must be greater than 0');
-    }
-
-    // --- Step 1: Normalization ---
+    // Normalization
     const utilizationScore = normalizeUtilization(creditUtilization);
     const inquiryScore = normalizeInquiries(inquiries);
-    const dtiRatio = monthlyDebtPayments / monthlyIncome;
+    const dtiRatio = monthlyIncome > 0 ?
+      monthlyDebtPayments / monthlyIncome :
+      monthlyDebtPayments / (assets / 12);
     const dtiScore = calculateDtiScore(dtiRatio, config, { monthlyIncome, monthlyDebtPayments, assets });
-    
     const mixFactor = calculateCreditMix(loanTypeCounts, creditMix);
-    
-    if (options.debug) {
-      console.debug('[Credit Score][Normalization]', {
-        utilizationScore,
-        inquiryScore,
-        dtiRatio,
-        dtiScore,
-        mixFactor
-      });
-    }
 
-    // --- Step 2: Penalties ---
+    // Penalties
     const penalties = calculatePenalties(
       {
-        recentLoanApplications,
         applicationDates,
-        defaultCountLast3Years,
         defaultDates,
-        consecutiveMissedPayments,
         missedPaymentDates,
-        missedPaymentsLast12,
-        monthsSinceLastDelinquency,
         activeLoanCount,
         monthlyIncome,
-        monthlyDebtPayments
+        monthlyDebtPayments,
+        missedPaymentsLast12,
+        monthsSinceLastDelinquency,
+        transactionsLast90Days
       },
       config,
       currentDate,
-      lastActiveDateObj
+      validateDate(userData.lastActiveDate || new Date().toISOString())
     );
 
-    // --- Step 3: Bonuses ---
+    // Bonuses
     const bonuses = calculateBonuses(
       {
         transactionsLast90Days,
@@ -509,29 +522,34 @@ export function calculateCreditScore(userData, options = {}) {
       config
     );
 
-    // --- Step 4: Plugin Contributions ---
+    // Plugin Contributions
     const pluginContributions = plugins.reduce((acc, plugin) => {
-      const result = plugin(userData, config, currentDate);
-      return {
-        score: acc.score + (result.score || 0),
-        explanations: [...acc.explanations, ...(result.explanations || [])]
-      };
+      try {
+        const result = plugin(userData, config, currentDate);
+        return {
+          score: acc.score + (result.score || 0),
+          explanations: [...acc.explanations, ...(result.explanations || [])]
+        };
+      } catch (e) {
+        console.error('[CreditScore] Plugin error:', e);
+        return acc;
+      }
     }, { score: 0, explanations: [] });
 
-    // --- Step 5: AI Adjustment ---
+    // AI Adjustment
     const aiAdjustment = applyAIModel(userData, { penalties, bonuses }, options);
 
-    if (options.debug) {
-      console.debug('[Credit Score][Penalties]', penalties);
-      console.debug('[Credit Score][Bonuses]', bonuses);
-      console.debug('[Credit Score][Plugins]', pluginContributions);
-      console.debug('[Credit Score][AI]', aiAdjustment);
+    // Employment status adjustment
+    let employmentAdjustment = 0;
+    if (employmentStatus === 'self-employed') {
+      employmentAdjustment = -2; // Penalty for income volatility
+    } else if (employmentStatus === 'unemployed' && assets <= 0) {
+      employmentAdjustment = -5;
     }
 
-    // --- Step 6: Weighted Score Calculation ---
-    // Helper to ensure all values are numbers
+    // Weighted Score Calculation
     const safe = v => (typeof v === 'number' && !isNaN(v) ? v : 0);
-    const weightedScore = (
+    const baseScore = (
       safe(paymentHistory) * weights.PAYMENT_HISTORY +
       safe(utilizationScore) * weights.UTILIZATION +
       safe(creditAge) * weights.CREDIT_AGE +
@@ -539,74 +557,100 @@ export function calculateCreditScore(userData, options = {}) {
       safe(inquiryScore) * weights.INQUIRIES +
       safe(dtiScore) * weights.DTI
     );
-    
-    if (options.debug) {
-      console.debug('[Credit Score][Weighted Score]', { weightedScore, weights });
-    }
 
-    // Final score calculation
-    const rawScore = weightedScore +
+    const normalizedBaseScore = (baseScore / totalWeights) * 100;
+
+    const rawScore = normalizedBaseScore +
       penalties.total +
       bonuses.total +
       pluginContributions.score +
-      aiAdjustment.adjustment;
-      
-    const scaledScore = Math.round(config.BASE_RANGE.MIN + 
-      ((rawScore / 100) * (config.BASE_RANGE.MAX - config.BASE_RANGE.MIN)));
-      
+      aiAdjustment.adjustment +
+      employmentAdjustment;
+
+    const scaledScore = Math.round(config.BASE_RANGE.MIN +
+      (rawScore / 100) * (config.BASE_RANGE.MAX - config.BASE_RANGE.MIN));
+
     const finalScore = Math.max(
-      config.BASE_RANGE.MIN, 
+      config.BASE_RANGE.MIN,
       Math.min(scaledScore, config.BASE_RANGE.MAX)
     );
-    
+
+    // Now apply collateral adjustment if needed
+    let collateralAdjustment = 0;
+    if (collateralValue === 0 && config.collateral.requiredForHighRisk && finalScore < 580) {
+      collateralAdjustment = -3; // Penalty for no collateral in high-risk cases
+    } else if (collateralValue > 0 && collateralQuality >= config.collateral.qualityThreshold) {
+      collateralAdjustment = 2; // Bonus for quality collateral
+    }
+    // Recalculate finalScore with collateralAdjustment
+    const adjustedFinalScore = Math.max(
+      config.BASE_RANGE.MIN,
+      Math.min(finalScore + collateralAdjustment, config.BASE_RANGE.MAX)
+    );
+
     if (options.debug) {
-      console.debug('[Credit Score][Final Score]', { rawScore, scaledScore, finalScore });
+      console.debug('[Credit Score][Normalization]', {
+        utilizationScore,
+        inquiryScore,
+        dtiRatio,
+        dtiScore,
+        mixFactor
+      });
+      console.debug('[Credit Score][Penalties]', penalties);
+      console.debug('[Credit Score][Bonuses]', bonuses);
+      console.debug('[Credit Score][Plugins]', pluginContributions);
+      console.debug('[Credit Score][AI]', aiAdjustment);
+      console.debug('[Credit Score][Employment]', { employmentAdjustment });
+      console.debug('[Credit Score][Collateral]', { collateralAdjustment });
     }
 
-    // --- Step 7: Classification ---
-    let classification = 'Poor';
-    if (finalScore >= config.CLASSIFICATIONS.EXCELLENT) classification = 'Excellent';
-    else if (finalScore >= config.CLASSIFICATIONS.VERY_GOOD) classification = 'Very Good';
-    else if (finalScore >= config.CLASSIFICATIONS.GOOD) classification = 'Good';
-    else if (finalScore >= config.CLASSIFICATIONS.FAIR) classification = 'Fair';
+    // Classification
+    let classification = 'POOR';
+    if (adjustedFinalScore >= config.CLASSIFICATIONS.EXCELLENT) classification = 'EXCELLENT';
+    else if (adjustedFinalScore >= config.CLASSIFICATIONS.VERY_GOOD) classification = 'VERY_GOOD';
+    else if (adjustedFinalScore >= config.CLASSIFICATIONS.GOOD) classification = 'GOOD';
+    else if (adjustedFinalScore >= config.CLASSIFICATIONS.FAIR) classification = 'FAIR';
 
-    // --- Step 8: Compliance & Security ---
+    // Compliance & Disclosures
     const requiredDisclosures = [];
     if (finalScore < 650) requiredDisclosures.push('LOW_SCORE_NOTICE');
     if (defaultCountLast3Years > 0) requiredDisclosures.push('DEROGATORY_MARK_WARNING');
     if (dtiRatio > config.DTI_THRESHOLDS.DANGER) requiredDisclosures.push('HIGH_DTI_WARNING');
+    if (employmentStatus === 'self-employed') requiredDisclosures.push('INCOME_VERIFICATION_REQUIRED');
+    if (collateralValue === 0 && finalScore < 580) requiredDisclosures.push('NO_COLLATERAL_WARNING');
     requiredDisclosures.push(...aiAdjustment.explanation, ...pluginContributions.explanations);
 
-    // --- Step 9: Result Construction ---
+    // Result Construction
     const result = {
-      score: finalScore,
+      score: adjustedFinalScore,
       classification,
       requiredDisclosures,
-      baseScore: +weightedScore.toFixed(2),
+      baseScore: +normalizedBaseScore.toFixed(2),
       breakdown: {
         paymentHistory: cap100(paymentHistory * weights.PAYMENT_HISTORY),
         creditUtilization: cap100(utilizationScore * weights.UTILIZATION),
         creditAge: cap100(creditAge * weights.CREDIT_AGE),
         creditMix: cap100(mixFactor * weights.CREDIT_MIX),
         inquiries: cap100(inquiryScore * weights.INQUIRIES),
-        dti: cap100(dtiScore * weights.DTI),
+        dti: cap100(dtiRatio * 100).toFixed(1),
         penalties: {
-          inactivity: penalties.inactivityPenalty,
-          loanCount: penalties.loanCountPenalty,
-          applications: penalties.applicationPenalty,
-          defaults: penalties.defaultHistoryPenalty,
-          missedPayments: penalties.missedPenalty,
-          delinquency: penalties.delinquencyPenalty,
-          highDti: penalties.dtiPenalty,
-          total: penalties.total
+          applications: +penalties.applicationPenalty.toFixed(2),
+          defaults: +penalties.defaultHistoryPenalty.toFixed(2),
+          missedStreak: +penalties.missedStreakPenalty.toFixed(2),
+          missedPayments: +penalties.missedPenalty.toFixed(2),
+          delinquency: +penalties.delinquencyPenalty.toFixed(2),
+          inactivity: +penalties.inactivityPenalty.toFixed(2),
+          loanCount: +penalties.loanCountPenalty.toFixed(2),
+          highDti: +penalties.dtiPenalty.toFixed(2),
+          total: +penalties.total.toFixed(2)
         },
         bonuses: {
-          activity: bonuses.activityBonus,
-          accountAge: bonuses.accountAgeBonus,
-          paymentRate: bonuses.paymentRateBonus,
-          recentOnTime: bonuses.recentOnTimeBonus,
-          lowDti: bonuses.lowDtiBonus,
-          total: bonuses.total
+          activity: +bonuses.activityBonus.toFixed(2),
+          accountAge: +bonuses.accountAgeBonus.toFixed(2),
+          paymentRate: +bonuses.paymentRateBonus.toFixed(2),
+          recentOnTime: +bonuses.recentOnTimeBonus.toFixed(2),
+          lowDti: +bonuses.lowDtiBonus.toFixed(2),
+          total: +bonuses.total.toFixed(2)
         },
         componentRatings: {
           paymentHistory: {
@@ -639,19 +683,27 @@ export function calculateCreditScore(userData, options = {}) {
           }
         },
         pluginContributions: pluginContributions.explanations,
-        aiAdjustments: aiAdjustment.explanation
+        aiAdjustments: aiAdjustment.explanation,
+        employmentAdjustment: +employmentAdjustment.toFixed(2),
+        collateralAdjustment: +collateralAdjustment.toFixed(2)
       },
-      version: 'v2.3',
-      aiEnabled: !!options.aiEnabled,
-      recessionMode: !!options.recessionMode,
-      dti: +dtiRatio.toFixed(4)
+      version: '2.5', // Updated version
+      calculatedAt: new Date().toISOString(),
+      dtiRatio: +dtiRatio.toFixed(4),
+      loanType,
+      customerProfile: {
+        employmentStatus,
+        collateralValue,
+        collateralQuality
+      }
     };
 
-    // PII Protection
-    if (options.hashPII) {
-      result.phoneHash = hashPhone(phoneNumber);
-    } else if (phoneNumber) {
-      result.phoneNumber = phoneNumber;
+    if (phoneNumber) {
+      if (options.hashPII) {
+        result.phoneHash = hashPhone(phoneNumber);
+      } else {
+        result.phoneNumber = phoneNumber;
+      }
     }
 
     return result;
@@ -661,7 +713,7 @@ export function calculateCreditScore(userData, options = {}) {
       console.error(err.message);
       throw err;
     }
-    console.error('[Credit Scoring] Unexpected Error:', err.message);
+    console.error('[Credit Scoring] Unexpected Error:', err);
     throw new CreditScoreError(`Scoring failed: ${err.message}`);
   }
 }

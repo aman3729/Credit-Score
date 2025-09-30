@@ -16,13 +16,9 @@ export const WebSocketProvider = ({ children }) => {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) return;
-
-        const newSocket = io(import.meta.env.VITE_WS_URL || 'ws://localhost:3000', {
-      auth: {
-        token
-      }
+    const newSocket = io(import.meta.env.VITE_WS_URL || 'ws://localhost:3000', {
+      withCredentials: true,
+      transports: ['websocket', 'polling']
     });
 
     newSocket.on('connect', () => {

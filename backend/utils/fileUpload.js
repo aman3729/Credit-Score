@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { promisify } from 'util';
 import AppError from './appError.js';
+import { uploadSingle, uploadArray } from '../middleware/upload.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,6 +18,28 @@ const PROCESSED_DIR = path.join(UPLOAD_DIR, 'processed');
 const ERROR_DIR = path.join(UPLOAD_DIR, 'errors');
 const TEMPLATE_DIR = path.join(process.cwd(), 'templates');
 
+// Path validation function to prevent path traversal
+const validateAndSanitizePath = (filePath, allowedDir) => {
+  // Resolve the path to get absolute path
+  const resolvedPath = path.resolve(filePath);
+  const allowedDirResolved = path.resolve(allowedDir);
+  
+  // Check if the resolved path is within the allowed directory
+  if (!resolvedPath.startsWith(allowedDirResolved)) {
+    throw new Error('Path traversal detected');
+  }
+  
+  // Normalize the path to remove any .. or . segments
+  const normalizedPath = path.normalize(resolvedPath);
+  
+  // Double-check the normalized path is still within allowed directory
+  if (!normalizedPath.startsWith(allowedDirResolved)) {
+    throw new Error('Path traversal detected after normalization');
+  }
+  
+  return normalizedPath;
+};
+
 // Ensure all required directories exist
 const ensureDirectories = async () => {
   for (const dir of [UPLOAD_DIR, PROCESSED_DIR, ERROR_DIR, TEMPLATE_DIR]) {
@@ -29,47 +52,12 @@ const ensureDirectories = async () => {
 // Initialize directories
 ensureDirectories().catch(console.error);
 
-// Configure multer storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOAD_DIR);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `upload-${uniqueSuffix}${ext}`);
-  },
-});
-
-// File filter for multer
-const fileFilter = (req, file, cb) => {
-  const filetypes = /\.(csv|json)$/i;
-  const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = [
-    'text/csv',
-    'application/json',
-    'application/vnd.ms-excel',
-    'text/plain',
-    'application/octet-stream'
-  ].includes(file.mimetype);
-
-  if (extname && mimetype) {
-    return cb(null, true);
-  }
-  
-  const error = new Error('Only .csv and .json files are allowed');
-  error.code = 'INVALID_FILE_TYPE';
-  return cb(error, false);
+// DEPRECATED: Disk-based multer setup removed in favor of hardened middleware in '../middleware/upload.js'.
+// Provide a backward-compatible facade exposing single/array that return the hardened middleware arrays.
+const upload = {
+  single: (fieldName = 'file') => uploadSingle(fieldName),
+  array: (fieldName = 'files', maxCount = 5) => uploadArray(fieldName, maxCount)
 };
-
-// Configure multer upload
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
-});
 
 // Error handler for file uploads
 const handleUploadError = (err, req, res, next) => {
@@ -96,14 +84,18 @@ const handleUploadError = (err, req, res, next) => {
 const moveFile = async (source, destination) => {
   await ensureDirectories();
   
-  const dir = path.dirname(destination);
+  // Validate and sanitize paths
+  const validatedSource = validateAndSanitizePath(source, process.cwd());
+  const validatedDestination = validateAndSanitizePath(destination, process.cwd());
+  
+  const dir = path.dirname(validatedDestination);
   if (!(await existsAsync(dir))) {
     await mkdirAsync(dir, { recursive: true });
   }
   
   return new Promise((resolve, reject) => {
-    const readStream = fs.createReadStream(source);
-    const writeStream = fs.createWriteStream(destination);
+    const readStream = fs.createReadStream(validatedSource);
+    const writeStream = fs.createWriteStream(validatedDestination);
     
     const onError = (error) => {
       readStream.destroy();

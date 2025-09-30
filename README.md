@@ -1,107 +1,122 @@
 # Credit Score Dashboard
 
-A full-stack application for managing and visualizing credit scores.
+A comprehensive credit scoring and lending decision platform with AI-powered analytics.
 
-## Features
+## 🚨 Security Notice
 
-- User authentication and authorization
-- Credit score visualization
-- Historical data tracking
-- Interactive dashboard
-- RESTful API backend
+This application handles sensitive financial data. Please ensure you:
 
-## Tech Stack
+1. **Never commit `.env` files** - They contain sensitive credentials
+2. **Use strong, unique passwords** for all services
+3. **Enable HTTPS in production** 
+4. **Regularly update dependencies** to patch security vulnerabilities
+5. **Monitor logs** for suspicious activity
 
-### Frontend
-- React 18
-- Vite
-- TailwindCSS
-- React Router
-- Axios
+## Quick Start
 
-### Backend
-- Node.js
-- Express
-- MongoDB with Mongoose
-- JWT Authentication
-- CORS enabled
+### Prerequisites
 
-## Prerequisites
-
-- Node.js (v16 or higher)
+- Node.js 18+ 
 - MongoDB
-- npm or yarn
+- Redis (for rate limiting)
 
-## Installation
+### Installation
 
-1. Clone the repository
-```bash
-git clone [repository-url]
-cd credit-score-dashboard
-```
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd credit-score-dashboard
+   ```
 
-2. Install Backend Dependencies
-```bash
-cd backend
-npm install
-```
+2. **Install dependencies**
+   ```bash
+   npm install
+   cd backend && npm install
+   cd ../frontend && npm install
+   ```
 
-3. Install Frontend Dependencies
-```bash
-cd frontend
-npm install
-```
+3. **Set up environment variables**
+   ```bash
+   # Backend
+   cp backend/env.example backend/.env
+   # Edit backend/.env with your actual values
+   
+   # Frontend  
+   cp frontend/env.example frontend/.env
+   # Edit frontend/.env with your actual values
+   ```
 
-4. Set up environment variables:
-   - Copy `.env.example` to `.env` in both frontend and backend directories
-   - Update the variables with your configuration
+4. **Required Environment Variables**
 
-## Development
+   **Backend (.env):**
+   ```bash
+   MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/database
+   JWT_SECRET=your-super-secret-jwt-key-here-make-it-long-and-random
+   JWT_REFRESH_SECRET=your-super-secret-refresh-jwt-key-here-make-it-long-and-random
+   SESSION_SECRET=your-super-secret-session-key-here-make-it-long-and-random
+   PHONE_SALT=your-super-secret-phone-salt-here-make-it-long-and-random
+   EMAIL_HOST=smtp.gmail.com
+   EMAIL_USER=your-email@gmail.com
+   EMAIL_PASS=your-app-password
+   FRONTEND_URL=http://localhost:5177
+   CORS_ORIGINS=http://localhost:5177,http://localhost:3000
+   ```
 
-1. Start the backend server:
-```bash
-cd backend
-npm run dev
-```
+   **Frontend (.env):**
+   ```bash
+   VITE_FIREBASE_API_KEY=your-firebase-api-key
+   VITE_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+   VITE_FIREBASE_PROJECT_ID=your-project-id
+   VITE_API_BASE_URL=http://localhost:3000/api/v1
+   ```
 
-2. Start the frontend development server:
-```bash
-cd frontend
-npm run dev
-```
+5. **Start the application**
+   ```bash
+   # Development (both frontend and backend)
+   npm run dev
+   
+   # Or start separately
+   npm run start --workspace=backend
+   npm run dev --workspace=frontend
+   ```
 
-The frontend will be available at `http://localhost:5173`
-The backend API will be available at `http://localhost:3000`
+## Security Features
 
-## Production Build
+- ✅ **JWT Authentication** with refresh tokens
+- ✅ **Rate Limiting** to prevent abuse
+- ✅ **CORS Protection** with specific origins
+- ✅ **Input Validation** and sanitization
+- ✅ **Path Traversal Protection** for file operations
+- ✅ **XSS Prevention** with proper content handling
+- ✅ **Environment-based Debug Routes** (development only)
+- ✅ **Secure Password Hashing** with bcrypt
+- ✅ **Helmet Security Headers**
+- ✅ **MongoDB Query Sanitization**
 
-1. Build the frontend:
-```bash
-cd frontend
-npm run build
-```
+## Production Deployment
 
-2. Start the production server:
-```bash
-cd backend
-npm start
-```
+1. **Set NODE_ENV=production**
+2. **Configure HTTPS** with SSL certificates
+3. **Set up proper CORS origins**
+4. **Use strong, unique secrets**
+5. **Enable monitoring and logging**
+6. **Regular security audits**
 
 ## API Documentation
 
-The API endpoints are documented using Swagger and can be accessed at `/api-docs` when running the backend server.
+See `API_DOCUMENTATION_ENHANCED.md` for detailed API endpoints.
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
 
 ## License
 
-This project is licensed under the MIT License.
+[Your License Here]
 
 ## Batch Uploads (Production)
 

@@ -141,7 +141,7 @@ api.interceptors.response.use(
     // Handle 401 Unauthorized
     if (error.response.status === 401) {
       console.warn('Authentication required');
-      localStorage.removeItem('token');
+      // Using httpOnly cookies; do not touch localStorage
       if (!window.location.pathname.includes('/login')) {
         window.location.href = '/login';
       }

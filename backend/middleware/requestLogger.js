@@ -1,72 +1,90 @@
 import { logger } from '../config/logger.js';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 /**
- * Request logging middleware that logs detailed information about each request
+ * Request logging middleware
+ * Logs all incoming requests with relevant metadata
  */
-const requestLogger = (req, res, next) => {
-  // Skip logging for health checks and static files
-  if (req.path === '/health' || req.path.includes('.')) {
-    return next();
-  }
+export const requestLogger = (req, res, next) => {
+  // Attach or generate a request ID
+  const reqId = req.get('X-Request-Id') || randomUUID();
+  req.requestId = reqId;
+  res.setHeader('X-Request-Id', reqId);
 
-  const requestId = uuidv4();
-  const start = Date.now();
+  const startTime = Date.now();
   
-  // Store the request ID for use in other middleware and controllers
-  req.requestId = requestId;
-  
-  // Log the incoming request
-  logger.info('Incoming request', {
-    requestId,
-    method: req.method,
-    url: req.originalUrl,
-    path: req.path,
-    query: req.query,
-    headers: {
-      'content-type': req.get('content-type'),
-      'user-agent': req.get('user-agent'),
-      'x-forwarded-for': req.get('x-forwarded-for') || req.connection.remoteAddress
-    },
-    body: req.body && Object.keys(req.body).length > 0 ? req.body : undefined,
-    timestamp: new Date().toISOString()
-  });
-
-  // Store the original response.end() function
+  // Capture original end method
   const originalEnd = res.end;
   
-  // Override the response.end() function to log the response
-  res.end = function (chunk, encoding) {
-    const responseTime = Date.now() - start;
+  // Override end method to capture response data
+  res.end = function(chunk, encoding) {
+    const duration = Date.now() - startTime;
+    const contentLength = res.getHeader('Content-Length') || (chunk ? Buffer.byteLength(chunk) : 0);
+    const isPreflight = req.method === 'OPTIONS';
     
-    // Log the response
-    logger.info('Outgoing response', {
-      requestId,
+    // Log request details
+    const logData = {
+      requestId: reqId,
+      method: req.method,
+      url: req.originalUrl,
+      path: req.path,
+      query: req.query,
       statusCode: res.statusCode,
-      statusMessage: res.statusMessage,
-      responseTime: `${responseTime}ms`,
+      duration: `${duration}ms`,
+      responseSize: typeof contentLength === 'number' ? `${contentLength}b` : String(contentLength),
+      preflight: isPreflight || undefined,
+      userAgent: req.get('User-Agent'),
+      ip: req.ip || req.connection.remoteAddress,
+      userId: req.user?.id || 'anonymous',
       timestamp: new Date().toISOString()
-    });
-    
-    // Call the original response.end() function
-    originalEnd.apply(res, arguments);
-  };
-  
-  // Handle errors
-  res.on('finish', () => {
-    if (res.statusCode >= 400) {
-      logger.error('Request error', {
-        requestId,
-        statusCode: res.statusCode,
-        statusMessage: res.statusMessage,
-        responseTime: `${Date.now() - start}ms`,
-        error: res.locals.error || {},
-        stack: res.locals.error?.stack
-      });
+    };
+
+    // Add request body for non-GET requests (sanitized)
+    if (req.method !== 'GET' && req.body) {
+      logData.requestBody = sanitizeRequestBody(req.body);
     }
-  });
-  
+
+    // Log based on status code
+    if (res.statusCode >= 400) {
+      logger.warn('Request completed with error', logData);
+    } else {
+      logger.info('Request completed successfully', logData);
+    }
+
+    // Call original end method
+    originalEnd.call(this, chunk, encoding);
+  };
+
   next();
 };
 
-export default requestLogger;
+/**
+ * Sanitize request body for logging
+ * Removes sensitive information like passwords, tokens, etc.
+ */
+function sanitizeRequestBody(body) {
+  if (!body || typeof body !== 'object') {
+    return body;
+  }
+
+  const sanitized = { ...body };
+  const sensitiveFields = [
+    'password',
+    'token',
+    'refreshToken',
+    'secret',
+    'apiKey',
+    'authorization',
+    'creditCard',
+    'ssn',
+    'nationalId'
+  ];
+
+  sensitiveFields.forEach(field => {
+    if (sanitized[field]) {
+      sanitized[field] = '[REDACTED]';
+    }
+  });
+
+  return sanitized;
+}

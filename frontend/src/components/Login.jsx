@@ -12,10 +12,8 @@ import {
   CardContent,
   CardFooter
 } from './ui/card';
-import { Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Loader2, User, Lock, AlertCircle, Mail, CheckCircle2 } from 'lucide-react';
 import EnhancedRegister from './EnhancedRegister';
-import { Fragment, useState as useReactState } from 'react';
-import StarryBackground from './StarryBackground';
 
 const useSimpleToast = () => {
   try {
@@ -32,7 +30,7 @@ const useSimpleToast = () => {
   }
 };
 
-const Login = () => {
+const Login = ({ onLogin }) => {
   const [activeTab, setActiveTab] = useState('login');
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -43,12 +41,16 @@ const Login = () => {
   const navigate = useNavigate();
   const { toast } = useSimpleToast();
   const isMountedRef = useRef(true);
-  const [showForgotModal, setShowForgotModal] = useReactState(false);
-  const [forgotEmail, setForgotEmail] = useReactState("");
-  const [forgotError, setForgotError] = useReactState("");
-  const [forgotSuccess, setForgotSuccess] = useReactState("");
-  const [forgotLoading, setForgotLoading] = useReactState(false);
-  const [showPrivacyModal, setShowPrivacyModal] = useReactState(false);
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState("");
+  const [forgotError, setForgotError] = useState("");
+  const [forgotSuccess, setForgotSuccess] = useState("");
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+  const [forgotStep, setForgotStep] = useState(1);
+  const [resetCode, setResetCode] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
 
   useEffect(() => {
     return () => {
@@ -59,6 +61,8 @@ const Login = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    
+    console.log('[Login] Form submitted with:', { identifier: identifier.trim(), password: '[HIDDEN]' });
     
     // Validation
     const trimmedIdentifier = identifier.trim();
@@ -75,8 +79,13 @@ const Login = () => {
     }
 
     try {
+      console.log('[Login] Setting loading state to true');
       setLoading(true);
+      
+      console.log('[Login] Calling login function with:', { identifier: trimmedIdentifier, password: '[HIDDEN]' });
       const user = await login(trimmedIdentifier, trimmedPassword);
+      
+      console.log('[Login] Login response received:', user);
       
       if (!user) {
         setError('Login failed. Please try again.');
@@ -110,12 +119,13 @@ const Login = () => {
     } catch (err) {
       if (!isMountedRef.current) return;
       
-      console.error('Login error:', err);
+      console.error('[Login] Login error:', err);
 
       let errorMessage = 'Failed to log in. Please try again.';
       
       if (err.response && err.response.status) {
         const res = err.response;
+        console.log('[Login] Error response:', { status: res.status, data: res.data });
         errorMessage =
           res.data?.message ||
           res.data?.error ||
@@ -129,10 +139,16 @@ const Login = () => {
                   ? 'Too many attempts. Please try again later'
                   : 'An unexpected error occurred');
       } else if (err.request) {
+        console.log('[Login] No response received:', err.request);
         errorMessage = 'No response from server. Please check your connection';
       } else if (err.message?.includes('Network Error')) {
+        console.log('[Login] Network error:', err.message);
         errorMessage = 'Network error: Could not reach the server';
+      } else if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+        console.log('[Login] Request timeout:', err.message);
+        errorMessage = 'Request timed out. Please try again';
       } else {
+        console.log('[Login] Other error:', err.message);
         errorMessage = err.message || 'Failed to log in. Please try again.';
       }
 
@@ -143,6 +159,8 @@ const Login = () => {
         variant: 'destructive',
       });
     } finally {
+      // Always reset loading state, even if component is unmounted
+      console.log('[Login] Finally block - resetting loading state');
       if (isMountedRef.current) {
         setLoading(false);
       }
@@ -170,301 +188,522 @@ const Login = () => {
       return;
     }
     setForgotLoading(true);
-    setTimeout(() => {
+    try {
+      const res = await fetch("/api/v1/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setForgotSuccess("A reset code has been sent to your email.");
+        setForgotStep(2);
+      } else {
+        setForgotError(data.message || "Failed to send reset code.");
+      }
+    } catch (err) {
+      setForgotError("Network error. Please try again.");
+    } finally {
       setForgotLoading(false);
-      setForgotSuccess("If this email is registered, a reset link has been sent.");
-    }, 1200);
+    }
   };
+
+  const handleResetSubmit = async (e) => {
+    e.preventDefault();
+    setForgotError("");
+    setForgotSuccess("");
+    if (!resetCode.match(/^\d{6}$/)) {
+      setForgotError("Please enter the 6-digit code sent to your email.");
+      return;
+    }
+    if (!resetPassword || resetPassword.length < 8) {
+      setForgotError("Password must be at least 8 characters.");
+      return;
+    }
+    if (resetPassword !== resetPasswordConfirm) {
+      setForgotError("Passwords do not match.");
+      return;
+    }
+    setForgotLoading(true);
+    try {
+      const res = await fetch("/api/v1/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: forgotEmail.trim(),
+          code: resetCode,
+          password: resetPassword,
+          passwordConfirm: resetPasswordConfirm
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setForgotSuccess("Password has been reset. You can now log in.");
+        setTimeout(() => {
+          setShowForgotModal(false);
+          setForgotEmail("");
+          setResetCode("");
+          setResetPassword("");
+          setResetPasswordConfirm("");
+          setForgotStep(1);
+          setForgotSuccess("");
+        }, 2000);
+      } else {
+        setForgotError(data.message || "Failed to reset password.");
+      }
+    } catch (err) {
+      setForgotError("Network error. Please try again.");
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const StarryBackground = () => (
+    <div className="fixed inset-0 bg-black z-0">
+      {[...Array(50)].map((_, i) => (
+        <div
+          key={i}
+          className="absolute rounded-full bg-white animate-pulse"
+          style={{
+            top: `${Math.random() * 100}%`,
+            left: `${Math.random() * 100}%`,
+            width: `${Math.random() * 3}px`,
+            height: `${Math.random() * 3}px`,
+            opacity: Math.random() * 0.7 + 0.3,
+            animationDuration: `${Math.random() * 5 + 2}s`,
+          }}
+        />
+      ))}
+    </div>
+  );
 
   return (
     <>
       <StarryBackground />
-      <div
-        className="fixed inset-0 min-h-0 min-w-0 flex flex-col justify-between animate-fade-in-slow overflow-hidden"
-        style={{ position: 'relative', zIndex: 1 }}
-      >
+      <div className="min-h-screen flex flex-col relative z-10">
         {/* Header */}
-        <header className="w-full py-6 px-6 flex flex-col items-center">
-          <div className="text-2xl font-bold text-[#1A3C5E] tracking-tight">YourAppName</div>
-          <h1 className="mt-4 text-3xl font-bold text-[#1A3C5E] text-center">Welcome</h1>
-          <p className="mt-2 text-lg text-[#6C757D] text-center">Sign in to access your dashboard</p>
+        <header className="w-full pt-8 pb-6 px-6 text-center animate-fade-in">
+          <div className="max-w-md mx-auto">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent mb-2">
+              myMVO
+            </h1>
+            <p className="text-lg text-muted-foreground">
+              Welcome back! Please sign in to continue
+            </p>
+          </div>
         </header>
 
-        {/* Login Card */}
-        <main className="flex-1 flex items-center justify-center">
-          <Card className="w-full max-w-md shadow-lg rounded-lg p-8 flex flex-col items-center border-0 animate-fade-in">
-            {/* Tab Navigation */}
-            <div className="flex w-full mb-6">
-              <Link
-                to="/login"
-                className={`flex-1 py-3 px-4 text-lg font-semibold transition-colors rounded-t-lg border-b-2 focus:outline-none text-center ${
-                  window.location.pathname === '/login'
-                    ? 'text-[#1A3C5E] border-[#17A2B8] bg-[#F8F9FA]'
-                    : 'text-[#6C757D] border-transparent hover:text-[#1A3C5E] bg-transparent'
-                }`}
-                aria-selected={window.location.pathname === '/login'}
-                role="tab"
-              >
-                Sign In
-              </Link>
-              <Link
-                to="/register"
-                className={`flex-1 py-3 px-4 text-lg font-semibold transition-colors rounded-t-lg border-b-2 focus:outline-none text-center ${
-                  window.location.pathname === '/register'
-                    ? 'text-[#1A3C5E] border-[#17A2B8] bg-[#F8F9FA]'
-                    : 'text-[#6C757D] border-transparent hover:text-[#1A3C5E] bg-transparent'
-                }`}
-                aria-selected={window.location.pathname === '/register'}
-                role="tab"
-              >
-                Create Account
-              </Link>
-            </div>
-            {/* The rest of the form fields and logic remain unchanged for now */}
-            {activeTab === 'login' ? (
-              <form onSubmit={handleSubmit} className="w-full">
-                <CardContent className="p-0 space-y-6">
+        {/* Main Content */}
+        <main className="flex-1 flex items-center justify-center px-6 py-8">
+          <div className="w-full max-w-md space-y-6">
+            {/* Glass Card */}
+            <Card className="border-0 shadow-xl backdrop-blur-lg bg-background/80 animate-slide-up">
+              <CardHeader className="space-y-1 pb-6">
+                {/* Tab Navigation */}
+                <div className="flex p-1 space-x-1 bg-muted rounded-lg">
+                  <button
+                    onClick={() => setActiveTab('login')}
+                    className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-md transition-all duration-200 ${
+                      activeTab === 'login'
+                        ? 'bg-background text-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    onClick={() => navigate('/register')}
+                    className={`flex-1 py-2.5 px-4 text-sm font-medium rounded-md transition-all duration-200 text-muted-foreground hover:text-foreground`}
+                  >
+                    Create Account
+                  </button>
+                </div>
+
+                <CardTitle className="text-2xl font-bold text-center">
+                  Sign In
+                </CardTitle>
+                <CardDescription className="text-center">
+                  Enter your credentials to access your account
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="space-y-6">
+                <form onSubmit={handleSubmit} className="space-y-4">
                   {/* Email/Username Input */}
-                  <div>
-                    <Label htmlFor="identifier" className="block text-[#1A3C5E] text-lg font-bold mb-1">Email or Username</Label>
-                    <Input
-                      id="identifier"
-                      type="text"
-                      value={identifier}
-                      onChange={e => setIdentifier(e.target.value)}
-                      placeholder="Enter your email or username"
-                      className="w-full border border-[#CED4DA] rounded-lg px-4 py-3 text-base text-[#6C757D] focus:border-[#17A2B8] focus:ring-2 focus:ring-[#17A2B8] transition-colors"
-                      aria-label="Email or Username input"
-                      autoComplete="username"
-                    />
+                  <div className="space-y-2">
+                    <Label htmlFor="identifier" className="text-sm font-medium">
+                      Email or Username
+                    </Label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="identifier"
+                        type="text"
+                        value={identifier}
+                        onChange={e => setIdentifier(e.target.value)}
+                        placeholder="Enter your email or username"
+                        className="pl-10 h-12 bg-background/50 border-border/50 focus:bg-background focus:border-primary transition-all duration-200"
+                        autoComplete="username"
+                      />
+                    </div>
                   </div>
+
                   {/* Password Input */}
-                  <div className="relative">
-                    <Label htmlFor="password" className="block text-[#1A3C5E] text-lg font-bold mb-1">Password</Label>
-                    <Input
-                      id="password"
-                      type={showPassword ? 'text' : 'password'}
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      placeholder="Enter your password"
-                      className="w-full border border-[#CED4DA] rounded-lg px-4 py-3 text-base text-[#6C757D] focus:border-[#17A2B8] focus:ring-2 focus:ring-[#17A2B8] transition-colors pr-12"
-                      aria-label="Password input"
-                      autoComplete="current-password"
-                    />
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      className="absolute right-3 top-9 transform -translate-y-1/2 text-[#6C757D] hover:text-[#17A2B8] focus:outline-none"
-                      onClick={() => setShowPassword(v => !v)}
-                      aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
+                  <div className="space-y-2">
+                    <Label htmlFor="password" className="text-sm font-medium">
+                      Password
+                    </Label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        placeholder="Enter your password"
+                        className="pl-10 pr-10 h-12 bg-background/50 border-border/50 focus:bg-background focus:border-primary transition-all duration-200"
+                        autoComplete="current-password"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(v => !v)}
+                        className="absolute right-3 top-3 h-4 w-4 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
+
                   {/* Remember Me & Forgot Password */}
-                  <div className="flex items-center justify-between mt-2">
-                    <label className="flex items-center text-[#6C757D] text-base">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center space-x-2 text-sm">
                       <input
                         type="checkbox"
-                        className="form-checkbox h-5 w-5 text-[#17A2B8] rounded border-[#CED4DA] focus:ring-[#17A2B8] mr-2"
-                        // TODO: wire up remember me logic if needed
+                        className="rounded border-border text-primary focus:ring-primary focus:ring-offset-0"
                       />
-                      Remember me
+                      <span className="text-muted-foreground">Remember me</span>
                     </label>
                     <button
                       type="button"
-                      className="text-[#17A2B8] text-sm hover:underline focus:outline-none"
                       onClick={() => setShowForgotModal(true)}
+                      className="text-sm text-primary hover:underline"
                     >
-                      Forgot Password?
+                      Forgot password?
                     </button>
                   </div>
-                  {/* Error/Success Message */}
+
+                  {/* Error Message */}
                   {error && (
-                    <div className="text-[#DC3545] text-sm italic mt-2 animate-slide-in-top" role="alert">
-                      {error}
+                    <div className="flex items-center space-x-2 p-3 bg-destructive/10 text-destructive rounded-lg text-sm animate-scale-in">
+                      <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                      <span>{error}</span>
                     </div>
                   )}
+
                   {/* Login Button */}
                   <Button
                     type="submit"
-                    className="w-full bg-[#17A2B8] hover:bg-[#138496] text-white text-lg font-bold rounded-lg py-3 mt-2 transition-colors disabled:bg-[#6C757D] flex items-center justify-center"
+                    className="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white"
                     disabled={loading}
                   >
                     {loading ? (
                       <>
-                        <Loader2 className="animate-spin mr-2" size={24} /> Signing In…
+                        <Loader2 className="animate-spin mr-2 h-4 w-4" />
+                        Signing In...
                       </>
                     ) : (
                       'Sign In'
                     )}
                   </Button>
-                </CardContent>
-              </form>
-            ) : (
-            <CardContent className="p-0">
-              <EnhancedRegister
-                isAdmin={false}
-                onSuccess={handleRegisterSuccess}
-                onClose={() => setActiveTab('login')}
-                showPendingMessage={true}
-              />
-              <CardFooter className="p-6 bg-gray-50 dark:bg-gray-800/50 border-t border-gray-200 dark:border-gray-700">
-                <div className="text-center w-full">
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Already have an account?{' '}
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab('login')}
-                      className="font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 hover:underline"
-                    >
-                      Sign in
-                    </button>
-                  </p>
-                </div>
-              </CardFooter>
-            </CardContent>
-          )}
 
-          {/* Alternative Login Options */}
-          {activeTab === 'login' && (
-            <div className="w-full max-w-md mx-auto mt-6 flex flex-col items-center">
-              <div className="flex items-center w-full mb-4">
-                <div className="flex-grow border-t border-[#CED4DA]" />
-                <span className="mx-4 text-[#6C757D] text-base">Or sign in with</span>
-                <div className="flex-grow border-t border-[#CED4DA]" />
-              </div>
-              <button
-                type="button"
-                className="w-full flex items-center justify-center gap-3 bg-[#1A3C5E] hover:bg-[#142A44] text-white font-semibold rounded-lg py-3 mb-3 transition-colors transform hover:scale-105 duration-200"
-                onClick={() => alert('Google login (mock)')}
-              >
-                {/* Google SVG */}
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <g clipPath="url(#clip0_17_40)">
-                    <path d="M23.766 12.276c0-.818-.074-1.604-.213-2.356H12.24v4.451h6.484a5.54 5.54 0 01-2.4 3.637v3.017h3.877c2.27-2.092 3.565-5.175 3.565-8.749z" fill="#4285F4"/>
-                    <path d="M12.24 24c3.24 0 5.963-1.073 7.95-2.917l-3.877-3.017c-1.08.726-2.457 1.155-4.073 1.155-3.13 0-5.78-2.113-6.734-4.946H1.53v3.09A11.997 11.997 0 0012.24 24z" fill="#34A853"/>
-                    <path d="M5.506 14.275a7.19 7.19 0 010-4.55V6.635H1.53a12.002 12.002 0 000 10.73l3.976-3.09z" fill="#FBBC05"/>
-                    <path d="M12.24 4.771c1.765 0 3.34.607 4.584 1.8l3.433-3.433C18.2 1.073 15.477 0 12.24 0A11.997 11.997 0 001.53 6.635l3.976 3.09c.954-2.833 3.604-4.954 6.734-4.954z" fill="#EA4335"/>
-                  </g>
-                  <defs>
-                    <clipPath id="clip0_17_40">
-                      <rect width="24" height="24" fill="white"/>
-                    </clipPath>
-                  </defs>
-                </svg>
-                Sign in with Google
-              </button>
-              <button
-                type="button"
-                className="w-full flex items-center justify-center gap-3 bg-[#1A3C5E] hover:bg-[#142A44] text-white font-semibold rounded-lg py-3 transition-colors"
-                onClick={() => alert('SSO login (mock)')}
-              >
-                {/* Lock Icon */}
-                <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="feather feather-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
-                Sign in with SSO
-              </button>
-            </div>
-          )}
-          </Card>
+                  {/* Divider */}
+                  <div className="relative my-6">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-border/50" />
+                    </div>
+                    <div className="relative flex justify-center text-xs uppercase">
+                      <span className="bg-background px-2 text-muted-foreground">or continue with</span>
+                    </div>
+                  </div>
+
+                  {/* Social Login Buttons */}
+                  <div className="space-y-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="lg"
+                      className="w-full"
+                      onClick={() => alert('Google login (mock)')}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <g clipPath="url(#clip0_17_40)">
+                          <path d="M23.766 12.276c0-.818-.074-1.604-.213-2.356H12.24v4.451h6.484a5.54 5.54 0 01-2.4 3.637v3.017h3.877c2.27-2.092 3.565-5.175 3.565-8.749z" fill="#4285F4"/>
+                          <path d="M12.24 24c3.24 0 5.963-1.073 7.95-2.917l-3.877-3.017c-1.08.726-2.457 1.155-4.073 1.155-3.13 0-5.78-2.113-6.734-4.946H1.53v3.09A11.997 11.997 0 0012.24 24z" fill="#34A853"/>
+                          <path d="M5.506 14.275a7.19 7.19 0 010-4.55V6.635H1.53a12.002 12.002 0 000 10.73l3.976-3.09z" fill="#FBBC05"/>
+                          <path d="M12.24 4.771c1.765 0 3.34.607 4.584 1.8l3.433-3.433C18.2 1.073 15.477 0 12.24 0A11.997 11.997 0 001.53 6.635l3.976 3.09c.954-2.833 3.604-4.954 6.734-4.954z" fill="#EA4335"/>
+                        </g>
+                        <defs>
+                          <clipPath id="clip0_17_40">
+                            <rect width="24" height="24" fill="white"/>
+                          </clipPath>
+                        </defs>
+                      </svg>
+                      Continue with Google
+                    </Button>
+                    
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="lg"
+                      className="w-full"
+                      onClick={() => alert('SSO login (mock)')}
+                    >
+                      <Lock className="mr-2 h-4 w-4" />
+                      Continue with SSO
+                    </Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          </div>
         </main>
 
         {/* Footer */}
-        <footer className="w-full py-4 px-6 flex flex-col items-center text-sm text-[#6C757D] bg-transparent mt-8">
-          <div className="flex flex-col md:flex-row gap-2 md:gap-6 items-center w-full md:w-auto text-center">
-            {/* Remove Create Account link from footer */}
-            <span className="hover:underline cursor-pointer" onClick={() => setShowPrivacyModal(true)}>Privacy Policy</span>
+        <footer className="w-full py-6 px-6 text-center text-sm text-muted-foreground">
+          <div className="max-w-md mx-auto space-y-2">
+            <div className="flex justify-center space-x-6">
+              <button
+                onClick={() => setShowPrivacyModal(true)}
+                className="hover:text-foreground transition-colors"
+              >
+                Privacy Policy
+              </button>
+              <a 
+                href="mailto:support@yourapp.com" 
+                className="hover:text-foreground transition-colors"
+              >
+                Support
+              </a>
+            </div>
+            <p>© 2024 myMVO. All rights reserved.</p>
           </div>
-          <div className="mt-2">Need help? <a href="mailto:support@yourapp.com" className="underline">Contact Support</a></div>
         </footer>
 
         {/* Forgot Password Modal */}
         {showForgotModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 animate-fade-in">
-            <div
-              className="bg-white rounded-lg shadow-xl w-[90%] max-w-sm p-6 relative animate-fade-in"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="forgot-title"
-              tabIndex={-1}
-              ref={el => el && showForgotModal && el.focus()}
-            >
-              <h2 id="forgot-title" className="text-xl font-bold text-[#1A3C5E] mb-2 text-center">Reset Password</h2>
-              <p className="text-[#6C757D] text-sm mb-4 text-center">Enter your email to receive a reset link.</p>
-              <form onSubmit={handleForgotSubmit}>
-                <input
-                  type="email"
-                  className="w-full border border-[#CED4DA] rounded-lg px-4 py-3 text-base text-[#6C757D] focus:border-[#17A2B8] focus:ring-2 focus:ring-[#17A2B8] transition-colors mb-2"
-                  placeholder="Enter your email"
-                  value={forgotEmail}
-                  onChange={e => setForgotEmail(e.target.value)}
-                  aria-label="Forgot password email input"
-                  autoFocus
-                  required
-                />
-                {forgotError && (
-                  <div className="text-[#DC3545] text-sm italic mb-2 animate-fade-in" role="alert">{forgotError}</div>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm animate-fade-in">
+            <Card className="w-[90%] max-w-md shadow-xl animate-scale-in">
+              <CardHeader>
+                <CardTitle className="text-center">Reset Password</CardTitle>
+                <CardDescription className="text-center">
+                  {forgotStep === 1 
+                    ? "Enter your email to receive a reset code"
+                    : "Enter the code and your new password"
+                  }
+                </CardDescription>
+              </CardHeader>
+              
+              <CardContent className="space-y-4">
+                {forgotStep === 1 ? (
+                  <form onSubmit={handleForgotSubmit} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="forgot-email">Email Address</Label>
+                      <div className="relative">
+                        <Mail className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          id="forgot-email"
+                          type="email"
+                          value={forgotEmail}
+                          onChange={e => setForgotEmail(e.target.value)}
+                          placeholder="Enter your email"
+                          className="pl-10"
+                          autoFocus
+                          required
+                        />
+                      </div>
+                    </div>
+                    
+                    {forgotError && (
+                      <div className="flex items-center space-x-2 p-3 bg-destructive/10 text-destructive rounded-lg text-sm">
+                        <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                        <span>{forgotError}</span>
+                      </div>
+                    )}
+                    
+                    {forgotSuccess && (
+                      <div className="flex items-center space-x-2 p-3 bg-green-50 text-green-600 rounded-lg text-sm">
+                        <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                        <span>{forgotSuccess}</span>
+                      </div>
+                    )}
+                    
+                    <div className="flex space-x-2">
+                      <Button
+                        type="submit"
+                        className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 text-white"
+                        disabled={forgotLoading}
+                      >
+                        {forgotLoading ? (
+                          <>
+                            <Loader2 className="animate-spin mr-2 h-4 w-4" />
+                            Sending...
+                          </>
+                        ) : (
+                          'Send Code'
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => {
+                          setShowForgotModal(false);
+                          setForgotEmail("");
+                          setForgotError("");
+                          setForgotSuccess("");
+                          setForgotStep(1);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleResetSubmit} className="space-y-4">
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="reset-code">6-Digit Code</Label>
+                        <Input
+                          id="reset-code"
+                          type="text"
+                          value={resetCode}
+                          onChange={e => setResetCode(e.target.value)}
+                          placeholder="Enter 6-digit code"
+                          maxLength={6}
+                          required
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="new-password">New Password</Label>
+                        <Input
+                          id="new-password"
+                          type="password"
+                          value={resetPassword}
+                          onChange={e => setResetPassword(e.target.value)}
+                          placeholder="Enter new password"
+                          required
+                        />
+                      </div>
+                      
+                      <div className="space-y-2">
+                        <Label htmlFor="confirm-password">Confirm Password</Label>
+                        <Input
+                          id="confirm-password"
+                          type="password"
+                          value={resetPasswordConfirm}
+                          onChange={e => setResetPasswordConfirm(e.target.value)}
+                          placeholder="Confirm new password"
+                          required
+                        />
+                      </div>
+                    </div>
+                    
+                    {forgotError && (
+                      <div className="flex items-center space-x-2 p-3 bg-destructive/10 text-destructive rounded-lg text-sm">
+                        <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                        <span>{forgotError}</span>
+                      </div>
+                    )}
+                    
+                    {forgotSuccess && (
+                      <div className="flex items-center space-x-2 p-3 bg-green-50 text-green-600 rounded-lg text-sm">
+                        <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                        <span>{forgotSuccess}</span>
+                      </div>
+                    )}
+                    
+                    <div className="flex space-x-2">
+                      <Button
+                        type="submit"
+                        className="flex-1 bg-gradient-to-r from-blue-500 to-purple-600 text-white"
+                        disabled={forgotLoading}
+                      >
+                        {forgotLoading ? (
+                          <>
+                            <Loader2 className="animate-spin mr-2 h-4 w-4" />
+                            Resetting...
+                          </>
+                        ) : (
+                          'Reset Password'
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => {
+                          setShowForgotModal(false);
+                          setForgotEmail("");
+                          setForgotError("");
+                          setForgotSuccess("");
+                          setForgotStep(1);
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </form>
                 )}
-                {forgotSuccess && (
-                  <div className="text-[#28A745] text-sm italic mb-2 animate-fade-in" role="status">{forgotSuccess}</div>
-                )}
-                <div className="flex gap-2 mt-4">
-                  <button
-                    type="submit"
-                    className="flex-1 bg-[#17A2B8] hover:bg-[#138496] text-white font-bold rounded-lg py-2 transition-colors disabled:bg-[#6C757D]"
-                    disabled={forgotLoading}
-                  >
-                    {forgotLoading ? <Loader2 className="animate-spin inline-block mr-2" size={20} /> : null}
-                    Send Reset Link
-                  </button>
-                  <button
-                    type="button"
-                    className="flex-1 bg-[#CED4DA] hover:bg-[#B0B8BE] text-[#1A3C5E] font-bold rounded-lg py-2 transition-colors"
-                    onClick={() => {
-                      setShowForgotModal(false);
-                      setForgotEmail("");
-                      setForgotError("");
-                      setForgotSuccess("");
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </div>
+              </CardContent>
+            </Card>
           </div>
         )}
+
         {/* Privacy Policy Modal */}
         {showPrivacyModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 animate-fade-in">
-            <div
-              className="bg-white rounded-lg shadow-xl w-[90%] max-w-lg p-6 relative animate-fade-in max-h-[80vh] overflow-y-auto"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="privacy-title"
-              tabIndex={-1}
-              ref={el => el && showPrivacyModal && el.focus()}
-            >
-              <h2 id="privacy-title" className="text-xl font-bold text-[#1A3C5E] mb-2 text-center">Privacy Policy</h2>
-              <div className="text-[#6C757D] text-sm mb-4 whitespace-pre-line">
-                <p>
-                  This is a placeholder for your Privacy Policy. 
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm animate-fade-in">
+            <Card className="w-[90%] max-w-2xl max-h-[80vh] overflow-hidden shadow-xl animate-scale-in">
+              <CardHeader>
+                <CardTitle className="text-center">Privacy Policy</CardTitle>
+              </CardHeader>
+              
+              <CardContent className="overflow-y-auto">
+                <div className="prose prose-sm max-w-none text-muted-foreground">
+                  <p className="mb-4">
+                    This is a placeholder for your Privacy Policy.
+                  </p>
                   
-                  Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed euismod, nunc ut laoreet dictum, massa erat cursus enim, nec dictum ex enim nec urna. Etiam euismod, urna eu tincidunt consectetur, nisi nisl aliquam nunc, eget aliquam nisl nunc euismod nunc. 
+                  <p className="mb-4">
+                    Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed euismod, nunc ut laoreet dictum, 
+                    massa erat cursus enim, nec dictum ex enim nec urna. Etiam euismod, urna eu tincidunt consectetur, 
+                    nisi nisl aliquam nunc, eget aliquam nisl nunc euismod nunc.
+                  </p>
                   
-                  Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Integer nec odio. Praesent libero. Sed cursus ante dapibus diam. 
+                  <p className="mb-4">
+                    Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. 
+                    Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; 
+                    Integer nec odio. Praesent libero. Sed cursus ante dapibus diam.
+                  </p>
                   
-                  For more information, contact support@yourapp.com.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="w-full bg-[#17A2B8] hover:bg-[#138496] text-white font-bold rounded-lg py-2 transition-colors mt-2"
-                onClick={() => setShowPrivacyModal(false)}
-              >
-                Close
-              </button>
-            </div>
+                  <p>
+                    For more information, contact{' '}
+                    <a href="mailto:support@yourapp.com" className="text-primary hover:underline">
+                      support@yourapp.com
+                    </a>
+                  </p>
+                </div>
+              </CardContent>
+              
+              <CardFooter>
+                <Button
+                  onClick={() => setShowPrivacyModal(false)}
+                  className="w-full"
+                >
+                  Close
+                </Button>
+              </CardFooter>
+            </Card>
           </div>
         )}
       </div>

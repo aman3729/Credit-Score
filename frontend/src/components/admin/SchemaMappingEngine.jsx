@@ -62,12 +62,36 @@ const REQUIRED_FIELDS = [
   'totalAccounts'
 ];
 
+const ENGINE_OPTIONS = [
+  { value: 'default', label: 'FF Score' },
+  { value: 'ai', label: 'AI Scoring' },
+  { value: 'creditworthiness', label: 'TF Score' }
+];
+
+const ENGINE_REQUIRED_FIELDS = {
+  default: REQUIRED_FIELDS,
+  ai: [],
+  creditworthiness: []
+};
+
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
+// Add a useIsMobile hook
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return isMobile;
+}
+
 const SchemaMappingEngine = () => {
   const [mappingForm] = Form.useForm();
+  const [activeTab, setActiveTab] = useState('detect');
   
   // State management
   const [fileState, setFileState] = useState({
@@ -88,7 +112,6 @@ const SchemaMappingEngine = () => {
   
   const [partners, setPartners] = useState([]);
   const [selectedPartner, setSelectedPartner] = useState(null);
-  const [isCreatingPartner] = useState(false);
   const [mappingResults, setMappingResults] = useState(null);
   const [testResults, setTestResults] = useState(null);
   const [scoringResults, setScoringResults] = useState(null);
@@ -97,18 +120,12 @@ const SchemaMappingEngine = () => {
   const [isApplyingMapping, setIsApplyingMapping] = useState(false);
   const [isTestingMapping, setIsTestingMapping] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [mappingCreated, setMappingCreated] = useState(false);
   const [availableFields, setAvailableFields] = useState({});
 
-  // Compute missing required fields
-  const missingRequired = useMemo(() => {
-    return REQUIRED_FIELDS.filter(
-      field => !Object.keys(mappingState.fieldMappings).includes(field)
-    );
-  }, [mappingState.fieldMappings]);
-
-  // Custom hooks
+  // FIX: Move useMappings hook to top level
   const [partnerMappings, setPartnerMappings] = useMappings(selectedPartner?.id);
+
+  const isMobile = useIsMobile();
 
   // Load available fields and partners
   useEffect(() => {
@@ -213,6 +230,12 @@ const SchemaMappingEngine = () => {
 
   // Create new mapping
   const createMapping = useCallback(async (values) => {
+    const engineType = values.engineType;
+    const requiredFields = ENGINE_REQUIRED_FIELDS[engineType] || [];
+    const missingRequired = requiredFields.filter(
+      field => !Object.keys(mappingState.fieldMappings).includes(field)
+    );
+    
     if (missingRequired.length > 0) {
       message.error(`Missing required fields: ${missingRequired.join(', ')}`);
       return;
@@ -236,6 +259,7 @@ const SchemaMappingEngine = () => {
         fieldMappings: mappingState.fieldMappings,
         sampleData: fileState.sampleData,
         version,
+        engineType,
         validationRules: {
           requiredFields: Object.keys(mappingState.fieldMappings)
             .filter(key => mappingState.fieldMappings[key].isRequired),
@@ -247,7 +271,6 @@ const SchemaMappingEngine = () => {
       const response = await api.post('/schema-mapping/create', mappingData);
 
       if (response.data.success) {
-        setMappingCreated(true);
         message.success('Schema mapping created successfully');
         setMappingState(prev => ({
           ...prev,
@@ -255,6 +278,7 @@ const SchemaMappingEngine = () => {
           fieldMappings: {}
         }));
         mappingForm.resetFields();
+        setActiveTab('apply');
       }
     } catch (error) {
       const status = error.response?.status;
@@ -267,7 +291,7 @@ const SchemaMappingEngine = () => {
     } finally {
       setIsCreatingMapping(false);
     }
-  }, [fileState, mappingState, selectedPartner, missingRequired, mappingForm]);
+  }, [fileState, mappingState, selectedPartner, mappingForm]);
 
   // Apply mapping to data
   const applyMapping = useCallback(async () => {
@@ -449,25 +473,6 @@ const SchemaMappingEngine = () => {
     });
   }, [fileState.detectionResult]);
 
-  // Memoized components
-  const FieldTable = useMemo(() => React.memo(({ fields, onUpdate }) => (
-    <Table 
-      dataSource={fields} 
-      columns={fieldDetectionColumns(onUpdate)} 
-      rowKey="key" 
-      pagination={false} 
-    />
-  )), []);
-
-  const MappingTable = useMemo(() => React.memo(({ mappings, onDelete }) => (
-    <Table 
-      dataSource={mappings} 
-      columns={mappingColumns(onDelete)} 
-      rowKey="key" 
-      pagination={false} 
-    />
-  )), []);
-
   // Column generators
   const fieldDetectionColumns = useCallback((onUpdate) => [
     {
@@ -609,9 +614,28 @@ const SchemaMappingEngine = () => {
     </Card>
   );
 
-  const renderFieldDetection = () => {
-    if (!fileState.detectionResult) return null;
+  // 1. Sample Data Preview Table Responsive
+      {fileState.fileType === 'csv' && fileState.sampleData?.length > 0 && (
+        <Card title="Sample Data Preview" style={{ marginBottom: 16 }}>
+          <div style={{ overflowX: 'auto' }}>
+            <Table
+              dataSource={fileState.sampleData.slice(0, 3)}
+              columns={Object.keys(fileState.sampleData[0] || {}).map(key => ({
+                title: key,
+                dataIndex: key,
+                ellipsis: true
+              }))}
+              pagination={false}
+              scroll={{ x: true }}
+              size="small"
+            />
+          </div>
+        </Card>
+      )}
 
+  // Field Detection: true mobile card view with runtime check
+  const renderFieldDetection = (isMobile) => {
+    if (!fileState.detectionResult) return null;
     const { detectedFields = [] } = fileState.detectionResult;
     if (detectedFields.length === 0) {
       return (
@@ -624,21 +648,49 @@ const SchemaMappingEngine = () => {
         </Card>
       );
     }
-
+    // True mobile card view (no AntD Table)
+    if (isMobile) {
+      return (
+        <>
+          <div style={{ border: '2px solid red', marginBottom: 16, padding: 8, borderRadius: 8 }}>
+            <div style={{ fontWeight: 'bold', color: 'red', marginBottom: 8 }}>MOBILE CARD</div>
+            {detectedFields.map((field, idx) => (
+              <div key={idx} className="bg-white dark:bg-[#0d261c] rounded-xl shadow border border-gray-200 dark:border-[#1a4a38] p-4 flex flex-col gap-2 w-full mb-3">
+                <div className="flex flex-col gap-1">
+                  <div className="font-semibold text-gray-900 dark:text-white text-base">{field.sourceField}</div>
+                  <div className="text-xs text-gray-600 dark:text-[#a8d5ba]">Target: <b>{field.targetField}</b></div>
+                  <div className="text-xs text-gray-600 dark:text-[#a8d5ba]">Confidence: {Math.round(field.confidence * 100)}%</div>
+                  <div className="text-xs text-gray-600 dark:text-[#a8d5ba]">Required: {field.isRequired ? 'Yes' : 'No'}</div>
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    className="bg-green-600 hover:bg-green-700 text-white rounded px-3 py-1 text-xs font-semibold"
+                    onClick={() => addFieldMapping(field.sourceField, field.targetField, field.transformation, field.isRequired)}
+                  >
+                    Add Mapping
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      );
+    }
+    // Desktop: AntD Table
     return (
-      <>
-        <Card title="Detected Fields" style={{ marginBottom: 16 }}>
-          <Input.Search
-            placeholder="Search fields..."
-            allowClear
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            style={{ marginBottom: 16, maxWidth: 300 }}
-          />
-          <Spin spinning={isDetecting} tip="Detecting fields...">
-            <FieldTable
-              fields={detectedFields
-                .filter(f => 
+      <Card title="Detected Fields" style={{ marginBottom: 16 }}>
+        <Input.Search
+          placeholder="Search fields..."
+          allowClear
+          value={searchTerm}
+          onChange={e => setSearchTerm(e.target.value)}
+          style={{ marginBottom: 16, maxWidth: 300 }}
+        />
+        <Spin spinning={isDetecting} tip="Detecting fields...">
+          <div style={{ overflowX: 'auto' }}>
+            <Table
+              dataSource={detectedFields
+                .filter(f =>
                   !searchTerm ||
                   f.sourceField.toLowerCase().includes(searchTerm.toLowerCase()) ||
                   f.targetField.toLowerCase().includes(searchTerm.toLowerCase())
@@ -647,198 +699,278 @@ const SchemaMappingEngine = () => {
                   ...f,
                   key: `${f.sourceField}_${f.targetField}`
                 }))}
-              onUpdate={updateDetectedFieldTarget}
+              columns={fieldDetectionColumns(updateDetectedFieldTarget)}
+              pagination={false}
             />
-          </Spin>
-        </Card>
-
-        <Card title="Next Steps" style={{ marginBottom: 16 }}>
-          <Alert
-            message="Field Detection Complete!"
-            description={
-              <div>
-                <p><strong>To process your data:</strong></p>
-                <ol>
-                  <li>Add field mappings using the action buttons</li>
-                  <li>Review mappings in the Create Mapping tab</li>
-                  <li>Create and apply your mapping</li>
-                </ol>
-              </div>
-            }
-            type="success"
-            showIcon
-          />
-          <Space style={{ marginTop: 16 }}>
-            <Button 
-              type="primary" 
-              icon={<SaveOutlined />}
-              onClick={() => document.querySelector('.ant-tabs-tab:nth-child(2)').click()}
-            >
-              Create Mapping
-            </Button>
-            <Button 
-              type="default" 
-              icon={<EyeOutlined />}
-              onClick={() => document.querySelector('.ant-tabs-tab:nth-child(3)').click()}
-            >
-              Apply Mapping
-            </Button>
-            <Button 
-              icon={<CheckCircleOutlined />}
-              onClick={addAllDetectedFields}
-            >
-              Add All Fields
-            </Button>
-          </Space>
-        </Card>
-      </>
+          </div>
+        </Spin>
+      </Card>
     );
   };
 
+  // Field Mappings: true mobile card view
   const renderFieldMappings = () => {
     const mappings = Object.values(mappingState.fieldMappings);
-    
     if (mappings.length === 0) {
       return (
         <Card title="Field Mappings" style={{ marginBottom: 16 }}>
           <Empty description="No field mappings configured">
-            <Button type="primary" onClick={() => document.querySelector('.ant-tabs-tab:first-child').click()}>
+            <Button type="primary" onClick={() => setActiveTab('detect')}>
               Detect Fields
             </Button>
           </Empty>
         </Card>
       );
     }
-
+    // True mobile card view (no AntD Table)
+    const mobileCards = (
+      <div className="block md:hidden space-y-3 w-full">
+        {mappings.map((m, idx) => (
+          <div key={idx} className="bg-white dark:bg-[#0d261c] rounded-xl shadow border border-gray-200 dark:border-[#1a4a38] p-4 flex flex-col gap-2 w-full">
+            <div className="flex flex-col gap-1">
+              <div className="font-semibold text-gray-900 dark:text-white text-base">{m.sourceField}</div>
+              <div className="text-xs text-gray-600 dark:text-[#a8d5ba]">Target: <b>{m.targetField}</b></div>
+              <div className="text-xs text-gray-600 dark:text-[#a8d5ba]">Transformation: {m.transformation}</div>
+              <div className="text-xs text-gray-600 dark:text-[#a8d5ba]">Required: {m.isRequired ? 'Yes' : 'No'}</div>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button
+                className="bg-red-600 hover:bg-red-700 text-white rounded px-3 py-1 text-xs font-semibold"
+                onClick={() => confirmDelete(m.targetField)}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
     return (
       <Card title="Field Mappings" style={{ marginBottom: 16 }}>
-        <MappingTable 
-          mappings={mappings.map((m, i) => ({ ...m, key: `${m.sourceField}_${i}` }))} 
-          onDelete={confirmDelete} 
-        />
+        {mobileCards}
+        <div className="hidden md:block" style={{ overflowX: 'auto' }}>
+          <Table 
+            dataSource={mappings.map((m, i) => ({ ...m, key: `${m.sourceField}_${i}` }))} 
+            columns={mappingColumns(confirmDelete)} 
+            pagination={false} 
+          />
+        </div>
       </Card>
     );
   };
 
-  const renderMappingConfiguration = () => (
-    <Card title="Mapping Configuration" style={{ marginBottom: 16 }}>
-      <Form form={mappingForm} layout="vertical" onFinish={createMapping}>
-        <Row gutter={16}>
-          <Col span={12}>
-            <Form.Item
-              name="name"
-              label="Mapping Name"
-              rules={[{ 
-                required: true, 
-                message: 'Please enter a mapping name' 
-              }]}
-            >
-              <Input placeholder="e.g., Bank A CSV Mapping" />
-            </Form.Item>
-          </Col>
-          <Col span={12}>
-            <Form.Item
-              name="description"
-              label="Description"
-              rules={[{ max: 200, message: 'Description too long' }]}
-            >
-              <TextArea 
-                placeholder="Describe this mapping..." 
-                rows={2} 
-                showCount 
-                maxLength={200} 
-              />
-            </Form.Item>
-          </Col>
-        </Row>
-        
-        {missingRequired.length > 0 && (
-          <Alert
-            type="error"
-            showIcon
-            message={`Missing required fields: ${missingRequired.join(', ')}`}
-            style={{ marginBottom: 16 }}
-          />
-        )}
-        
-        <Button
-          type="primary"
-          icon={<SaveOutlined />}
-          onClick={() => mappingForm.submit()}
-          loading={isCreatingMapping}
-          disabled={Object.keys(mappingState.fieldMappings).length === 0}
-        >
-          Create Mapping
-        </Button>
-      </Form>
-    </Card>
-  );
+  const renderMappingConfiguration = () => {
+    const engineType = mappingForm.getFieldValue('engineType') || 'default';
+    const requiredFields = ENGINE_REQUIRED_FIELDS[engineType] || [];
+    const missingRequired = requiredFields.filter(
+      field => !Object.keys(mappingState.fieldMappings).includes(field)
+    );
 
-  const renderApplyMappingCard = () => (
-    <Card title="Apply Mapping" style={{ marginBottom: 16 }}>
-      <Form layout="vertical">
-        <Form.Item label="Partner" required>
-          <Select
-            placeholder="Select partner"
-            onChange={value => setSelectedPartner(
-              partners.find(p => p.id === value)
-            )}
-            value={selectedPartner?.id}
-            loading={partners.length === 0}
+    return (
+      <Card title="Mapping Configuration" style={{ marginBottom: 16 }}>
+        <Form form={mappingForm} layout="vertical" onFinish={createMapping} 
+          initialValues={{ engineType: 'default' }}>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item
+                name="name"
+                label="Mapping Name"
+                rules={[{ 
+                  required: true, 
+                  message: 'Please enter a mapping name' 
+                }]}
+              >
+                <Input placeholder="e.g., Bank A CSV Mapping" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="description"
+                label="Description"
+                rules={[{ max: 200, message: 'Description too long' }]}
+              >
+                <TextArea 
+                  placeholder="Describe this mapping..." 
+                  rows={2} 
+                  showCount 
+                  maxLength={200} 
+                />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item
+                name="engineType"
+                label="Scoring Engine"
+                rules={[{ required: true, message: 'Please select a scoring engine' }]}
+              >
+                <Select
+                  onChange={value => mappingForm.setFieldsValue({ engineType: value })}
+                  style={{ width: '100%' }}
+                >
+                  {ENGINE_OPTIONS.map(opt => (
+                    <Option key={opt.value} value={opt.value}>{opt.label}</Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+          {missingRequired.length > 0 && (
+            <Alert
+              type="error"
+              showIcon
+              message={`Missing required fields: ${missingRequired.join(', ')}`}
+              style={{ marginBottom: 16 }}
+            />
+          )}
+          <Button
+            type="primary"
+            icon={<SaveOutlined />}
+            htmlType="submit"
+            loading={isCreatingMapping}
+            disabled={Object.keys(mappingState.fieldMappings).length === 0}
           >
-            {partners.map(partner => (
-              <Option key={partner.id} value={partner.id}>
-                {partner.name}
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
-        
-        <Form.Item label="Mapping" required>
-          <Select
-            placeholder="Select mapping"
-            onChange={value => setMappingState(prev => ({
-              ...prev, 
-              selectedMapping: value
-            }))}
-            value={mappingState.selectedMapping}
-            disabled={!selectedPartner}
-            loading={!partnerMappings}
+            Create Mapping
+          </Button>
+        </Form>
+      </Card>
+    );
+  };
+
+  const renderApplyMappingCard = () => {
+    // Mobile card layout
+    const mobileCard = (
+      <div className="block md:hidden space-y-4 w-full">
+        <div className="bg-white dark:bg-[#0d261c] rounded-xl shadow border border-gray-200 dark:border-[#1a4a38] p-4 flex flex-col gap-4 w-full">
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-[#a8d5ba] mb-1">Partner</label>
+            <Select
+              placeholder="Select partner"
+              onChange={value => setSelectedPartner(partners.find(p => p.id === value))}
+              value={selectedPartner?.id}
+              loading={partners.length === 0}
+              style={{ width: '100%' }}
+            >
+              {partners.map(partner => (
+                <Option key={partner.id} value={partner.id}>{partner.name}</Option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-700 dark:text-[#a8d5ba] mb-1">Mapping</label>
+            <Select
+              placeholder="Select mapping"
+              onChange={value => setMappingState(prev => ({ ...prev, selectedMapping: value }))}
+              value={mappingState.selectedMapping}
+              disabled={!selectedPartner}
+              loading={!partnerMappings}
+              style={{ width: '100%' }}
+            >
+              {(partnerMappings || []).map(mapping => (
+                <Option key={mapping._id} value={mapping._id}>{mapping.name} (v{mapping.version})</Option>
+              ))}
+            </Select>
+          </div>
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            onClick={applyMapping}
+            loading={isApplyingMapping}
+            disabled={!mappingState.selectedMapping || !fileState.uploadedFile}
+            style={{ width: '100%', marginTop: 8 }}
           >
-            {(partnerMappings || []).map(mapping => (
-              <Option key={mapping._id} value={mapping._id}>
-                {mapping.name} (v{mapping.version})
-              </Option>
-            ))}
-          </Select>
-        </Form.Item>
-      </Form>
-      
-      <Button
-        type="primary"
-        icon={<PlayCircleOutlined />}
-        onClick={applyMapping}
-        loading={isApplyingMapping}
-        disabled={!mappingState.selectedMapping || !fileState.uploadedFile}
-        style={{ marginTop: 16 }}
-      >
-        Apply Mapping
-      </Button>
-    </Card>
-  );
+            Apply Mapping
+          </Button>
+        </div>
+      </div>
+    );
+    // Desktop layout
+    return (
+      <>
+        {mobileCard}
+        <div className="hidden md:block">
+          <Card title="Apply Mapping" style={{ marginBottom: 16 }}>
+            <Form layout="vertical">
+              <Form.Item label="Partner" required>
+                <Select
+                  placeholder="Select partner"
+                  onChange={value => setSelectedPartner(
+                    partners.find(p => p.id === value)
+                  )}
+                  value={selectedPartner?.id}
+                  loading={partners.length === 0}
+                >
+                  {partners.map(partner => (
+                    <Option key={partner.id} value={partner.id}>
+                      {partner.name}
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+              <Form.Item label="Mapping" required>
+                <Select
+                  placeholder="Select mapping"
+                  onChange={value => setMappingState(prev => ({
+                    ...prev, 
+                    selectedMapping: value
+                  }))}
+                  value={mappingState.selectedMapping}
+                  disabled={!selectedPartner}
+                  loading={!partnerMappings}
+                >
+                  {(partnerMappings || []).map(mapping => (
+                    <Option key={mapping._id} value={mapping._id}>
+                      {mapping.name} (v{mapping.version})
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Form>
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              onClick={applyMapping}
+              loading={isApplyingMapping}
+              disabled={!mappingState.selectedMapping || !fileState.uploadedFile}
+              style={{ marginTop: 16 }}
+            >
+              Apply Mapping
+            </Button>
+          </Card>
+        </div>
+      </>
+    );
+  };
 
   const renderTestMappingCard = () => (
-    <Card title="Test Mapping" style={{ marginBottom: 16 }}>
-      <Button
-        type="primary"
-        icon={<EyeOutlined />}
-        onClick={testMapping}
-        loading={isTestingMapping}
-        disabled={Object.keys(mappingState.fieldMappings).length === 0}
-      >
-        Test with Sample Data
-      </Button>
-    </Card>
+    <>
+      <div className="block md:hidden w-full">
+        <div className="bg-white dark:bg-[#0d261c] rounded-xl shadow border border-gray-200 dark:border-[#1a4a38] p-4 flex flex-col gap-4 w-full">
+          <Button
+            type="primary"
+            icon={<EyeOutlined />}
+            onClick={testMapping}
+            loading={isTestingMapping}
+            disabled={Object.keys(mappingState.fieldMappings).length === 0}
+            style={{ width: '100%' }}
+          >
+            Test with Sample Data
+          </Button>
+        </div>
+      </div>
+      <div className="hidden md:block">
+        <Card title="Test Mapping" style={{ marginBottom: 16 }}>
+          <Button
+            type="primary"
+            icon={<EyeOutlined />}
+            onClick={testMapping}
+            loading={isTestingMapping}
+            disabled={Object.keys(mappingState.fieldMappings).length === 0}
+          >
+            Test with Sample Data
+          </Button>
+        </Card>
+      </div>
+    </>
   );
 
   // Tabs configuration
@@ -849,7 +981,7 @@ const SchemaMappingEngine = () => {
       children: (
         <>
           {renderFileUploadCard()}
-          {renderFieldDetection()}
+          {renderFieldDetection(isMobile)}
         </>
       )
     },
@@ -906,10 +1038,10 @@ const SchemaMappingEngine = () => {
     mappingState, 
     partners, 
     selectedPartner, 
-    partnerMappings, 
     testResults,
     mappingResults,
-    scoringResults
+    scoringResults,
+    isMobile
   ]);
 
   return (
@@ -923,22 +1055,25 @@ const SchemaMappingEngine = () => {
       
       {fileState.fileType === 'csv' && fileState.sampleData?.length > 0 && (
         <Card title="Sample Data Preview" style={{ marginBottom: 16 }}>
-          <Table
-            dataSource={fileState.sampleData.slice(0, 3)}
-            columns={Object.keys(fileState.sampleData[0] || {}).map(key => ({
-              title: key,
-              dataIndex: key,
-              ellipsis: true
-            }))}
-            pagination={false}
-            scroll={{ x: true }}
-            size="small"
-          />
+          <div style={{ overflowX: 'auto' }}>
+            <Table
+              dataSource={fileState.sampleData.slice(0, 3)}
+              columns={Object.keys(fileState.sampleData[0] || {}).map(key => ({
+                title: key,
+                dataIndex: key,
+                ellipsis: true
+              }))}
+              pagination={false}
+              scroll={{ x: true }}
+              size="small"
+            />
+          </div>
         </Card>
       )}
       
       <Tabs 
-        defaultActiveKey="detect" 
+        activeKey={activeTab}
+        onChange={setActiveTab}
         items={tabsItems} 
         tabBarExtraContent={
           <Button 

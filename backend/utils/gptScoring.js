@@ -1,7 +1,8 @@
 export const generateAIScore = async (creditData) => {
-  // Fake AI scoring logic for now
+  // TODO: Implement real AI scoring logic
+  // For now, return null to indicate no AI score is available
   return {
-    score: 720,
-    summary: 'AI-powered credit score generated successfully.',
+    score: null,
+    summary: 'AI scoring not yet implemented.',
   };
 };

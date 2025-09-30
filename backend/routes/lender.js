@@ -1,12 +1,13 @@
 import express from 'express';
 import mongoose from 'mongoose';
 import { auth } from '../middleware/auth.js';
-import { rateLimiter, dashboardLimiter } from '../middleware/rateLimiter.js';
+import { rateLimiter } from '../middleware/rateLimiter.js';
 import CreditReport from '../models/CreditReport.js';
 import User from '../models/User.js';
 import { LoanCalculator } from '../utils/LoanCalculator.js';
 import CreditScore from '../models/CreditScore.js';
 import SecurityLog from '../models/SecurityLog.js';
+import { makeLoanDecision } from '../controllers/loanController.js';
 
 const router = express.Router();
 
@@ -15,137 +16,140 @@ router.get('/test', (req, res) => {
   res.json({ message: 'Lender routes are working!' });
 });
 
-// Debug route to list all credit reports (temporary)
-router.get('/debug/credit-reports', auth, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
+// Debug routes - only available in development
+if (process.env.NODE_ENV === 'development') {
+  // Debug route to list all credit reports (development only)
+  router.get('/debug/credit-reports', auth, async (req, res) => {
+    try {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+      }
+      const reports = await CreditReport.find({}).populate('userId', 'email name').lean();
+      
+      res.json({
+        count: reports.length,
+        reports: reports.map(r => ({
+          _id: r._id,
+          userId: r.userId?._id || r.userId,
+          userEmail: r.userId?.email,
+          userName: r.userId?.name,
+          'creditScore.fico.score': r.creditScore?.fico?.score,
+          updatedAt: r.updatedAt,
+          hasCreditScore: !!r.creditScore
+        }))
+      });
+    } catch (error) {
+      console.error('Debug error:', error);
+      res.status(500).json({ status: 'error', message: 'Debug error', details: error.message });
     }
-    const reports = await CreditReport.find({}).populate('userId', 'email name').lean();
-    
-    res.json({
-      count: reports.length,
-      reports: reports.map(r => ({
-        _id: r._id,
-        userId: r.userId?._id || r.userId,
-        userEmail: r.userId?.email,
-        userName: r.userId?.name,
-        'creditScore.fico.score': r.creditScore?.fico?.score,
-        updatedAt: r.updatedAt,
-        hasCreditScore: !!r.creditScore
-      }))
-    });
-  } catch (error) {
-    console.error('Debug error:', error);
-    res.status(500).json({ status: 'error', message: 'Debug error', details: error.message });
-  }
-});
+  });
 
-// Debug endpoint to check credit report structure
-router.get('/debug/credit-report-structure', auth, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
+  // Debug endpoint to check credit report structure (development only)
+  router.get('/debug/credit-report-structure', auth, async (req, res) => {
+    try {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+      }
+      
+      // Get all credit reports with populated user data
+      const reports = await CreditReport.find({})
+        .populate('userId', 'email name _id')
+        .lean();
+      
+      // Get all users without reports
+      const usersWithoutReports = await User.aggregate([
+        {
+          $lookup: {
+            from: 'creditreports',
+            localField: '_id',
+            foreignField: 'userId',
+            as: 'report'
+          }
+        },
+        { $match: { report: { $size: 0 } } },
+        { $project: { _id: 1, email: 1, name: 1 } }
+      ]);
+      
+      // Get all reports with potential ID mismatches
+      const reportsWithMismatches = reports.filter(report => {
+        if (!report.userId) return true;
+        return report.userId._id.toString() !== report.userId.toString();
+      });
+      
+      res.json({
+        totalReports: reports.length,
+        totalUsers: await User.countDocuments(),
+        usersWithoutReports,
+        reportsWithMismatches,
+        sampleReport: reports[0] || null,
+        allReports: reports.map(r => ({
+          _id: r._id,
+          userId: r.userId?._id || r.userId,
+          userEmail: r.userId?.email,
+          userName: r.userId?.name,
+          hasCreditScore: !!r.creditScore,
+          updatedAt: r.updatedAt
+        }))
+      });
+    } catch (error) {
+      console.error('Debug error:', error);
+      res.status(500).json({ status: 'error', message: 'Debug error', details: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
     }
-    
-    // Get all credit reports with populated user data
-    const reports = await CreditReport.find({})
-      .populate('userId', 'email name _id')
-      .lean();
-    
-    // Get all users without reports
-    const usersWithoutReports = await User.aggregate([
-      {
-        $lookup: {
-          from: 'creditreports',
-          localField: '_id',
-          foreignField: 'userId',
-          as: 'report'
-        }
-      },
-      { $match: { report: { $size: 0 } } },
-      { $project: { _id: 1, email: 1, name: 1 } }
-    ]);
-    
-    // Get all reports with potential ID mismatches
-    const reportsWithMismatches = reports.filter(report => {
-      if (!report.userId) return true;
-      return report.userId._id.toString() !== report.userId.toString();
-    });
-    
-    res.json({
-      totalReports: reports.length,
-      totalUsers: await User.countDocuments(),
-      usersWithoutReports,
-      reportsWithMismatches,
-      sampleReport: reports[0] || null,
-      allReports: reports.map(r => ({
-        _id: r._id,
-        userId: r.userId?._id || r.userId,
-        userEmail: r.userId?.email,
-        userName: r.userId?.name,
-        hasCreditScore: !!r.creditScore,
-        updatedAt: r.updatedAt
-      }))
-    });
-  } catch (error) {
-    console.error('Debug error:', error);
-    res.status(500).json({ status: 'error', message: 'Debug error', details: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
-  }
-});
+  });
 
-// Debug endpoint to list all users and their credit reports
-router.get('/debug/all-users-reports', auth, async (req, res) => {
-  try {
-    if (req.user.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin access required' });
+  // Debug endpoint to list all users and their credit reports (development only)
+  router.get('/debug/all-users-reports', auth, async (req, res) => {
+    try {
+      if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+      }
+      
+      // Get all users with their credit reports
+      const users = await User.aggregate([
+        {
+          $lookup: {
+            from: 'creditreports',
+            localField: '_id',
+            foreignField: 'userId',
+            as: 'creditReport'
+          }
+        },
+        {
+          $project: {
+            _id: 1,
+            email: 1,
+            name: 1,
+            hasCreditReport: { $gt: [{ $size: '$creditReport' }, 0] },
+            creditReportId: { $arrayElemAt: ['$creditReport._id', null] },
+            hasCreditScore: {
+              $cond: {
+                if: { $gt: [{ $size: '$creditReport' }, 0] },
+                then: { $ifNull: [{ $gt: [{ $ifNull: [{ $arrayElemAt: ['$creditReport.creditScore', 0] }, {}] }, {}] }, false] },
+                else: false
+              }
+            },
+            updatedAt: { $arrayElemAt: ['$creditReport.updatedAt', null] }
+          }
+        },
+        { $sort: { hasCreditReport: -1, email: 1 } }
+      ]);
+      
+      res.json({
+        totalUsers: users.length,
+        usersWithReports: users.filter(u => u.hasCreditReport).length,
+        users: users
+      });
+    } catch (error) {
+      console.error('Debug error:', error);
+      res.status(500).json({ status: 'error', message: 'Debug error', details: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
     }
-    
-    // Get all users with their credit reports
-    const users = await User.aggregate([
-      {
-        $lookup: {
-          from: 'creditreports',
-          localField: '_id',
-          foreignField: 'userId',
-          as: 'creditReport'
-        }
-      },
-      {
-        $project: {
-          _id: 1,
-          email: 1,
-          name: 1,
-          hasCreditReport: { $gt: [{ $size: '$creditReport' }, 0] },
-          creditReportId: { $arrayElemAt: ['$creditReport._id', null] },
-          hasCreditScore: {
-            $cond: {
-              if: { $gt: [{ $size: '$creditReport' }, 0] },
-              then: { $ifNull: [{ $gt: [{ $ifNull: [{ $arrayElemAt: ['$creditReport.creditScore', 0] }, {}] }, {}] }, false] },
-              else: false
-            }
-          },
-          updatedAt: { $arrayElemAt: ['$creditReport.updatedAt', null] }
-        }
-      },
-      { $sort: { hasCreditReport: -1, email: 1 } }
-    ]);
-    
-    res.json({
-      totalUsers: users.length,
-      usersWithReports: users.filter(u => u.hasCreditReport).length,
-      users: users
-    });
-  } catch (error) {
-    console.error('Debug error:', error);
-    res.status(500).json({ status: 'error', message: 'Debug error', details: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
-  }
-});
+  });
+}
 
 // Import the CreditScore model if not already imported
 
 // Get list of borrowers with credit reports
-router.get('/borrowers', rateLimiter, auth, async (req, res) => {
+router.get('/borrowers', rateLimiter.general, auth, async (req, res) => {
   try {
     // Only allow lenders and admins to access this endpoint
     if (!['lender', 'admin'].includes(req.user.role)) {
@@ -706,7 +710,7 @@ router.get('/quick-report/:userId', auth, async (req, res) => {
 });
 
 // Get recent lending decisions
-router.get('/recent-decisions', dashboardLimiter, auth, async (req, res) => {
+router.get('/recent-decisions', rateLimiter.admin, auth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
     // Get recent credit reports with user data
@@ -889,19 +893,21 @@ router.post('/save-decision/:userId', auth, async (req, res) => {
 
     // Audit log: decision change
     await SecurityLog.create({
-      adminId: req.user.id,
+      user: req.user.id, // Required field for SecurityLog
       action: 'DECISION_CHANGE',
-      targetUserId: userId,
       details: {
         decision: newDecision.decision,
         isManual: newDecision.isManual,
         officer: req.user.id,
+        targetUserId: userId,
         evaluatedAt: newDecision.evaluatedAt,
         notes: newDecision.manualNotes || '',
         loanDetails: newDecision.loanDetails || {},
         rejectionReason: newDecision.rejectionReason || '',
         flagForReview: newDecision.flagForReview || false
       },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent'),
       timestamp: new Date()
     });
 
@@ -921,13 +927,16 @@ router.post('/save-decision/:userId', auth, async (req, res) => {
   }
 });
 
+// POST /loans/creditworthiness-decision
+router.post('/loans/creditworthiness-decision', auth, makeLoanDecision);
+
 // Helper to escape regex special characters
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Search borrowers by name, email, or phone (for lenders)
-router.get('/search-borrowers', rateLimiter, auth, async (req, res) => {
+router.get('/search-borrowers', rateLimiter.general, auth, async (req, res) => {
   try {
     if (!['lender', 'admin'].includes(req.user.role)) {
       return res.status(403).json({ error: 'Access denied', details: 'Only lenders and admins can search borrowers' });

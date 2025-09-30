@@ -125,18 +125,32 @@ const LoanDecisionStatus = ({
 
   // Calculate monthly payment
   const calculateMonthlyPayment = (amount, rate, term) => {
-    if (!amount || !rate || !term) return 0;
+    if (!amount || !term) return 0;
+    if (rate === 0) return amount / term;
     const monthlyRate = rate / 100 / 12;
     const payment = (amount * monthlyRate * Math.pow(1 + monthlyRate, term)) / 
                    (Math.pow(1 + monthlyRate, term) - 1);
     return payment;
   };
 
+  const normalizedAmount = Number(loanOffer?.amount ?? loanOffer?.maxAmount ?? 0) || 0;
+  const normalizedRate = Number(loanOffer?.interestRate ?? 0) || 0;
+  const normalizedTerm = Number(loanOffer?.termMonths ?? loanOffer?.term ?? 0) || 0;
+
   const monthlyPayment = calculateMonthlyPayment(
-    loanOffer?.amount || loanOffer?.maxAmount,
-    loanOffer?.interestRate,
-    loanOffer?.termMonths || loanOffer?.term
+    normalizedAmount,
+    normalizedRate,
+    normalizedTerm
   );
+
+  const formatDtiRating = (dtiValue, explicitRating) => {
+    if (explicitRating) return explicitRating;
+    if (typeof dtiValue !== 'number') return 'N/A';
+    if (dtiValue < 0.15) return 'Excellent';
+    if (dtiValue < 0.25) return 'Good';
+    if (dtiValue < 0.35) return 'Fair';
+    return 'Poor';
+  };
 
   return (
     <div className="space-y-6">
@@ -197,12 +211,19 @@ const LoanDecisionStatus = ({
                   <div className="flex justify-between">
                     <span>DTI Ratio:</span>
                     <span className="font-medium">
-                      {typeof decision?.dti === 'number' ? `${(decision.dti * 100).toFixed(1)}%` : 'N/A'}
+                      {typeof decision?.dti === 'number'
+                        ? `${(decision.dti * 100).toFixed(1)}%`
+                        : (typeof decision?.scoreResult?.dtiRatio === 'number'
+                            ? `${(decision.scoreResult.dtiRatio * 100).toFixed(1)}%`
+                            : 'N/A')}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span>DTI Rating:</span>
-                    <span className="font-medium">{decision?.dtiRating || 'N/A'}</span>
+                    <span className="font-medium">{formatDtiRating(
+                      typeof decision?.dti === 'number' ? decision.dti : decision?.scoreResult?.dtiRatio,
+                      decision?.dtiRating
+                    )}</span>
                   </div>
                 </div>
               </div>
@@ -276,12 +297,14 @@ const LoanDecisionStatus = ({
 
             {/* Decision Reasons */}
             {decision?.reasons && decision.reasons.length > 0 && (
-              <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <h4 className="font-medium text-sm text-muted-foreground mb-2">Decision Reasons</h4>
+              <div className={`p-4 ${decision?.decision?.toLowerCase() === 'reject' ? 'bg-red-50 dark:bg-red-900/20' : 'bg-green-50 dark:bg-green-900/20'} rounded-lg`}>
+                <h4 className="font-medium text-sm text-muted-foreground mb-2">
+                  {decision?.decision?.toLowerCase() === 'reject' ? 'Rejection Reasons' : 'Decision Reasons'}
+                </h4>
                 <div className="space-y-1">
                   {decision.reasons.map((reason, index) => (
                     <div key={index} className="flex items-center gap-2 text-sm">
-                      <span className="text-green-600">•</span>
+                      <span className={decision?.decision?.toLowerCase() === 'reject' ? 'text-red-600' : 'text-green-600'}>•</span>
                       <span>{reason}</span>
                     </div>
                   ))}
@@ -311,9 +334,7 @@ const LoanDecisionStatus = ({
                     <span className="text-sm text-muted-foreground">Loan Amount Offered</span>
                   </div>
                   <div className="text-2xl font-bold text-green-600">
-                    {((loanOffer.amount || loanOffer.maxAmount || 0) === 0)
-                      ? '$0 (Not Eligible)'
-                      : `$${(loanOffer.amount || loanOffer.maxAmount || 0).toLocaleString()}`}
+                    {normalizedAmount === 0 ? '$0 (Not Eligible)' : `$${normalizedAmount.toLocaleString()}`}
                   </div>
                 </div>
 
@@ -323,7 +344,7 @@ const LoanDecisionStatus = ({
                     <span className="text-sm text-muted-foreground">Interest Rate</span>
                   </div>
                   <div className="text-2xl font-bold text-blue-600">
-                    {(loanOffer.interestRate || 0).toFixed(1)}%
+                    {normalizedRate.toFixed(1)}%
                   </div>
                 </div>
 
@@ -333,7 +354,7 @@ const LoanDecisionStatus = ({
                     <span className="text-sm text-muted-foreground">Term (Months)</span>
                   </div>
                   <div className="text-2xl font-bold text-purple-600">
-                    {loanOffer.termMonths || loanOffer.term || 0} months
+                    {normalizedTerm > 0 ? `${normalizedTerm} months` : 'N/A'}
                   </div>
                 </div>
 
@@ -354,19 +375,19 @@ const LoanDecisionStatus = ({
                 <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                   <div className="text-sm text-muted-foreground">APR</div>
                   <div className="text-lg font-semibold">
-                    {((loanOffer.interestRate || 0) + 0.5).toFixed(2)}%
+                    {(normalizedRate + 0.5).toFixed(2)}%
                   </div>
                 </div>
                 <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                   <div className="text-sm text-muted-foreground">Total Interest</div>
                   <div className="text-lg font-semibold">
-                    ${((monthlyPayment * (loanOffer.termMonths || loanOffer.term || 0)) - (loanOffer.amount || loanOffer.maxAmount || 0)).toFixed(2)}
+                    ${((monthlyPayment * normalizedTerm) - normalizedAmount).toFixed(2)}
                   </div>
                 </div>
                 <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                   <div className="text-sm text-muted-foreground">Total Repayment</div>
                   <div className="text-lg font-semibold">
-                    ${(monthlyPayment * (loanOffer.termMonths || loanOffer.term || 0)).toFixed(2)}
+                    {normalizedTerm > 0 ? `$${(monthlyPayment * normalizedTerm).toFixed(2)}` : 'N/A'}
                   </div>
                 </div>
               </div>
@@ -528,115 +549,6 @@ const LoanDecisionStatus = ({
         </CardContent>
       </Card>
 
-      {/* Decision Actions */}
-      {isLender && decision?.decision === 'Approve' && (
-        <Card className="border-l-4 border-l-emerald-500">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CheckSquare className="h-5 w-5 text-emerald-600" />
-              Decision Actions
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {/* Primary Actions Row */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Button
-                  className="h-16 p-4 flex items-center justify-start gap-3 bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 min-w-0"
-                  onClick={() => handleDecisionAction('approve')}
-                >
-                  <div className="flex items-center justify-center w-8 h-8 bg-emerald-500 rounded-full flex-shrink-0">
-                    <CheckCircle2 className="h-5 w-5" />
-                  </div>
-                  <div className="text-left min-w-0">
-                    <div className="font-semibold text-base sm:text-lg truncate">✅ Approve Final Offer</div>
-                    <div className="text-xs sm:text-sm opacity-90 truncate">Confirm and finalize the loan offer</div>
-                  </div>
-                </Button>
-
-                <Button
-                  variant="outline"
-                  className="h-16 p-4 flex items-center justify-start gap-3 border-2 border-blue-200 hover:border-blue-300 hover:bg-blue-50 shadow-md hover:shadow-lg transition-all duration-200 transform hover:scale-105 min-w-0"
-                  onClick={() => handleDecisionAction('edit')}
-                >
-                  <div className="flex items-center justify-center w-8 h-8 bg-blue-100 rounded-full flex-shrink-0">
-                    <Edit className="h-5 w-5 text-blue-600" />
-                  </div>
-                  <div className="text-left min-w-0">
-                    <div className="font-semibold text-base sm:text-lg truncate">✏️ Edit Offer Terms</div>
-                    <div className="text-xs sm:text-sm text-muted-foreground truncate">Modify loan amount, rate, or terms</div>
-                  </div>
-                </Button>
-              </div>
-
-              {/* Secondary Actions Row */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <Button
-                  variant="outline"
-                  className="h-14 p-3 flex flex-col items-center gap-2 border-2 border-gray-200 hover:border-gray-300 hover:bg-gray-50 shadow-sm hover:shadow-md transition-all duration-200 min-w-0"
-                  onClick={() => handleDecisionAction('download')}
-                >
-                  <div className="flex items-center justify-center w-6 h-6 bg-gray-100 rounded-full flex-shrink-0">
-                    <Download className="h-4 w-4 text-gray-600" />
-                  </div>
-                  <span className="font-medium text-xs sm:text-sm text-center truncate">📄 Download Summary PDF</span>
-                </Button>
-
-                <Button
-                  variant="outline"
-                  className="h-14 p-3 flex flex-col items-center gap-2 border-2 border-green-200 hover:border-green-300 hover:bg-green-50 shadow-sm hover:shadow-md transition-all duration-200 min-w-0"
-                  onClick={() => handleDecisionAction('send')}
-                >
-                  <div className="flex items-center justify-center w-6 h-6 bg-green-100 rounded-full flex-shrink-0">
-                    <Send className="h-4 w-4 text-green-600" />
-                  </div>
-                  <span className="font-medium text-xs sm:text-sm text-center truncate">📤 Send Offer to Borrower</span>
-                </Button>
-
-                <Button
-                  variant="outline"
-                  className="h-14 p-3 flex flex-col items-center gap-2 border-2 border-orange-200 hover:border-orange-300 hover:bg-orange-50 shadow-sm hover:shadow-md transition-all duration-200 min-w-0"
-                  onClick={() => handleDecisionAction('hold')}
-                >
-                  <div className="flex items-center justify-center w-6 h-6 bg-orange-100 rounded-full flex-shrink-0">
-                    <Clock className="h-4 w-4 text-orange-600" />
-                  </div>
-                  <span className="font-medium text-xs sm:text-sm text-center truncate">⏸️ Put on Hold</span>
-                </Button>
-              </div>
-
-              {/* Danger Action */}
-              <div className="pt-2">
-                <Button
-                  variant="destructive"
-                  className="w-full h-14 p-4 flex items-center justify-center gap-3 bg-red-600 hover:bg-red-700 shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 min-w-0"
-                  onClick={() => handleDecisionAction('decline')}
-                >
-                  <div className="flex items-center justify-center w-8 h-8 bg-red-500 rounded-full flex-shrink-0">
-                    <XCircle className="h-5 w-5" />
-                  </div>
-                  <div className="text-center min-w-0">
-                    <div className="font-semibold text-base sm:text-lg truncate">❌ Dismiss / Decline Applicant</div>
-                    <div className="text-xs sm:text-sm opacity-90 truncate">Reject this application permanently</div>
-                  </div>
-                </Button>
-              </div>
-
-              {/* Action Status Indicator */}
-              <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4 text-blue-600" />
-                  <span className="text-xs sm:text-sm text-blue-800 dark:text-blue-200">
-                    <strong>Note:</strong> All actions are logged and require confirmation. 
-                    Changes to offer terms will trigger a new approval workflow.
-                  </span>
-                </div>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Risk Flags and Warnings */}
       {decision?.riskFlags && decision.riskFlags.length > 0 && (
         <Card className="border-l-4 border-l-red-500">
@@ -662,4 +574,4 @@ const LoanDecisionStatus = ({
   );
 };
 
-export default LoanDecisionStatus; 
+export default LoanDecisionStatus;
