@@ -217,15 +217,24 @@ export class Application {
 
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-    if (process.env.NODE_ENV === 'production') {
+    if (process.env.NODE_ENV === 'production' && !process.env.DISABLE_CUSTOM_SSL) {
       const sslDir = path.join(__dirname, '../ssl');
-      const options = {
-        key: fs.readFileSync(path.join(sslDir, 'private.key')),
-        cert: fs.readFileSync(path.join(sslDir, 'certificate.crt')),
-        ca: fs.readFileSync(path.join(sslDir, 'ca_bundle.crt')),
-      };
-      this.server = https.createServer(options, this.app);
-      logger.info('HTTPS server created');
+      const privateKeyPath = path.join(sslDir, 'private.key');
+      
+      // Check if SSL files exist before trying to use them
+      if (fs.existsSync(privateKeyPath)) {
+        const options = {
+          key: fs.readFileSync(path.join(sslDir, 'private.key')),
+          cert: fs.readFileSync(path.join(sslDir, 'certificate.crt')),
+          ca: fs.readFileSync(path.join(sslDir, 'ca_bundle.crt')),
+        };
+        this.server = https.createServer(options, this.app);
+        logger.info('HTTPS server created with custom SSL');
+      } else {
+        // Use HTTP server - Railway will handle SSL termination
+        this.server = http.createServer(this.app);
+        logger.info('HTTP server created (SSL handled by platform)');
+      }
     } else {
       this.server = http.createServer(this.app);
       logger.info('HTTP server created');
