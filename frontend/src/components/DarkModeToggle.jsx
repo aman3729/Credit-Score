@@ -10,7 +10,7 @@ const DarkModeToggle = ({ darkMode, toggleDarkMode }) => {
       <div className="relative w-6 h-6 flex items-center justify-center overflow-hidden">
         {/* Moon (Dark Mode) */}
         <svg
-          className={`absolute w-5 h-5 text-emerald-300 transition-all duration-300 ease-[cubic-bezier(0.68,-0.55,0.27,1.55)] ${
+          className={`absolute w-5 h-5 text-emerald-300 transition-all duration-300 ease-out ${
             darkMode 
               ? 'rotate-0 opacity-100 scale-100' 
               : 'rotate-90 opacity-0 scale-0'
@@ -29,7 +29,7 @@ const DarkModeToggle = ({ darkMode, toggleDarkMode }) => {
 
         {/* Sun (Light Mode) */}
         <svg
-          className={`absolute w-6 h-6 text-amber-300 transition-all duration-300 ease-[cubic-bezier(0.68,-0.55,0.27,1.55)] ${
+          className={`absolute w-6 h-6 text-amber-300 transition-all duration-300 ease-out ${
             darkMode 
               ? 'rotate-90 opacity-0 scale-0' 
               : 'rotate-0 opacity-100 scale-100'
