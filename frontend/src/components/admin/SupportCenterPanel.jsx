@@ -1,6 +1,7 @@
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/card';
-import { Badge, Plus, Button, Send } from 'lucide-react';
+import { Badge, Plus, Send } from 'lucide-react';
+import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 
 const SupportCenterPanel = () => (

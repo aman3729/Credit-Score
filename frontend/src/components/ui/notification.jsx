@@ -204,7 +204,7 @@ const Notification = React.forwardRef(({
 
       {/* Progress bar for auto-dismiss */}
       <div className="absolute left-0 bottom-0 h-1 w-full bg-gray-200 dark:bg-gray-700">
-        <div className="h-1 bg-blue-500 dark:bg-blue-400 transition-all duration-[5s] ease-linear" />
+        <div className="h-1 bg-blue-500 dark:bg-blue-400 transition-all duration-[5000ms] ease-linear" />
       </div>
     </div>
   );
