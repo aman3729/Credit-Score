@@ -16,7 +16,7 @@ export const WebSocketProvider = ({ children }) => {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
-    const newSocket = io(import.meta.env.VITE_WS_URL || 'ws://localhost:3000', {
+    const newSocket = io(import.meta.env.VITE_WS_URL || 'wss://credit-score-production.up.railway.app', {
       withCredentials: true,
       transports: ['websocket', 'polling']
     });

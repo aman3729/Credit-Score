@@ -28,7 +28,7 @@ const RATE_LIMIT_WINDOW = 60; // 60 seconds rate limit window
 // API base URL configuration
 const API_BASE_URL = import.meta.env.DEV 
   ? '/api/v1'  // Using Vite proxy to /api/v1
-  : (import.meta.env.VITE_API_URL || 'http://localhost:3000/api/v1');
+  : (import.meta.env.VITE_API_BASE_URL || 'https://credit-score-production.up.railway.app/api/v1');
 
 console.log('API Base URL:', API_BASE_URL); // Debug log
 
