@@ -1,0 +1,2 @@
+import{r as o,j as a,h as i}from"./index-CLIkutcF.js";const t=o.forwardRef(({className:e,...r},s)=>a.jsx("textarea",{className:i("flex min-h-[80px] w-full rounded-md border border-input bg-[#22232b] text-[#F5F5F5] placeholder-[#CCCCCC] px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",e),ref:s,...r}));t.displayName="Textarea";export{t as T};
+//# sourceMappingURL=textarea-BeCFIVKL.js.map

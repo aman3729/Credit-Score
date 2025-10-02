@@ -1,0 +1,2 @@
+import{j as e}from"./index-CLIkutcF.js";import{E as s}from"./EnhancedRegister-CfCga3ys.js";import"./Combination-VzPjPnOx.js";import"./checkbox-B8vwzNvb.js";import"./separator-BLcX6XFs.js";import"./shield-klLB-pUT.js";const a=()=>e.jsx("div",{className:"min-h-screen flex items-center justify-center bg-background",children:e.jsx(s,{isAdmin:!1,onSuccess:()=>{},onClose:()=>{},showPendingMessage:!0})});export{a as default};
+//# sourceMappingURL=RegisterPage-CTeRHBUa.js.map

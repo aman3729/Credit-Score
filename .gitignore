@@ -48,3 +48,5 @@ Thumbs.db
 # Misc
 *.pem
 .vercel 
+# Local Netlify folder
+.netlify
